@@ -1,0 +1,1235 @@
+"""
+app.py — CustomTkinter dark-theme front-end for 日本語 Sensei.
+
+Security: The API key is NEVER written to disk. It is sourced from
+the GROQ_API_KEY env var or entered once via a secure modal dialog.
+The key lives only in memory for the duration of the session.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import tkinter as tk
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import customtkinter as ctk
+
+import config
+from config import Colors
+from audio_manager import AudioManager
+from ai_engine import WhisperTranscriber, GroqChat
+from tts_engine import TTSEngine
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+
+# ════════════════════════════════════════════════════════════════
+#  VOLUME VISUALISER
+# ════════════════════════════════════════════════════════════════
+
+class VolumeVisualiser(ctk.CTkFrame):
+    CANVAS_H: int = 68
+    BAR_H: int = 6
+
+    def __init__(
+        self, master: ctk.CTkBaseClass, audio: AudioManager, **kw,
+    ) -> None:
+        super().__init__(
+            master, fg_color=Colors.METER_BG, corner_radius=12,
+            border_width=1, border_color=Colors.METER_BORDER, **kw)
+        self._audio = audio
+        self._active = False
+        self._canvas_w: int = 600
+        self._canvas = tk.Canvas(
+            self, height=self.CANVAS_H, bg=Colors.METER_BG,
+            highlightthickness=0, bd=0)
+        self._canvas.pack(fill="x", padx=4, pady=4)
+        self._canvas.bind("<Configure>", self._on_resize)
+        self._draw_idle()
+
+    def activate(self) -> None:
+        self._active = True
+
+    def deactivate(self) -> None:
+        self._active = False
+        self._draw_idle()
+
+    def refresh(self) -> None:
+        if self._active:
+            self._draw_live()
+
+    def _on_resize(self, event: tk.Event) -> None:
+        self._canvas_w = max(event.width, 100)
+        if not self._active:
+            self._draw_idle()
+
+    def _level_color(self, level: float) -> tuple[str, str]:
+        if level < 0.35:
+            return Colors.METER_LOW, Colors.METER_GLOW_LOW
+        if level < 0.70:
+            return Colors.METER_MID, Colors.METER_GLOW_MID
+        return Colors.METER_HIGH, Colors.METER_GLOW_HIGH
+
+    def _draw_idle(self) -> None:
+        c = self._canvas
+        c.delete("all")
+        w = self._canvas_w
+        mid_y = (self.CANVAS_H - self.BAR_H) / 2
+        c.create_line(8, mid_y, w - 8, mid_y, fill=Colors.METER_IDLE, width=1)
+        c.create_text(w // 2, mid_y, text="🎙  Audio Monitor",
+                      fill=Colors.TEXT_SECONDARY, font=("Segoe UI", 10))
+        bar_y = self.CANVAS_H - self.BAR_H - 2
+        c.create_rectangle(4, bar_y, w - 4, bar_y + self.BAR_H,
+                           fill="#0d0d1e", outline="")
+
+    def _draw_live(self) -> None:
+        c = self._canvas
+        c.delete("all")
+        w = self._canvas_w
+        wave_h = self.CANVAS_H - self.BAR_H - 6
+        mid_y = wave_h / 2
+        level = self._audio.get_level()
+        waveform = self._audio.get_waveform(config.WAVEFORM_DISPLAY_PTS)
+        color, glow = self._level_color(level)
+        n_pts = len(waveform)
+        if n_pts < 2:
+            return
+        scale = mid_y * 4.5
+        top_pts: list[tuple[float, float]] = []
+        bot_pts: list[tuple[float, float]] = []
+        for i in range(n_pts):
+            x = 4 + i * (w - 8) / n_pts
+            amp = min(abs(float(waveform[i])) * scale, mid_y * 0.93)
+            top_pts.append((x, mid_y - amp))
+            bot_pts.append((x, mid_y + amp))
+        poly: list[float] = []
+        for px, py in top_pts:
+            poly.extend((px, py))
+        for px, py in reversed(bot_pts):
+            poly.extend((px, py))
+        if len(poly) >= 6:
+            c.create_polygon(poly, fill=glow, outline="", smooth=True)
+        line: list[float] = []
+        for i in range(n_pts):
+            x = 4 + i * (w - 8) / n_pts
+            y = max(3, min(wave_h - 3, mid_y - float(waveform[i]) * scale))
+            line.extend((x, y))
+        if len(line) >= 4:
+            c.create_line(line, fill=color, width=1.5, smooth=True)
+        c.create_line(4, mid_y, w - 4, mid_y, fill="#1a1a30", width=1)
+        bar_y = wave_h + 4
+        c.create_rectangle(4, bar_y, w - 4, bar_y + self.BAR_H,
+                           fill="#0d0d1e", outline="")
+        fill_w = max(0, (w - 8) * level)
+        if fill_w > 1:
+            c.create_rectangle(4, bar_y, 4 + fill_w, bar_y + self.BAR_H,
+                               fill=color, outline="")
+        peak = self._audio.get_peak()
+        peak_x = 4 + (w - 8) * min(peak, 1.0)
+        if peak > 0.02:
+            c.create_line(peak_x, bar_y, peak_x, bar_y + self.BAR_H,
+                          fill="#ffffff", width=2)
+        db = self._audio.get_level_db()
+        c.create_text(w - 10, 10, text=f"{db:+.0f} dB", anchor="e",
+                      fill=Colors.TEXT_SECONDARY, font=("Consolas", 9))
+
+
+# ════════════════════════════════════════════════════════════════
+#  SESSION HISTORY MANAGER
+# ════════════════════════════════════════════════════════════════
+
+class HistoryManager:
+    def __init__(self, base_dir: str = config.HISTORY_DIR) -> None:
+        self._base = Path(base_dir)
+        self._base.mkdir(parents=True, exist_ok=True)
+        self._session: dict = {}
+        self._path: Optional[Path] = None
+        self.new_session("A0.1")
+
+    def new_session(self, level: str) -> None:
+        ts = datetime.now()
+        sid = ts.strftime("%Y%m%d_%H%M%S")
+        self._session = {
+            "id": sid, "level": level,
+            "started": ts.isoformat(), "updated": ts.isoformat(),
+            "messages": [],
+        }
+        self._path = self._base / f"session_{sid}.json"
+
+    def set_level(self, level: str) -> None:
+        self._session["level"] = level
+        self._auto_save()
+
+    def add_message(self, role: str, content: str) -> None:
+        self._session["messages"].append({
+            "role": role, "content": content,
+            "time": datetime.now().isoformat(),
+        })
+        self._session["updated"] = datetime.now().isoformat()
+        self._auto_save()
+
+    def _auto_save(self) -> None:
+        if self._path and self._session.get("messages"):
+            try:
+                self._path.write_text(
+                    json.dumps(self._session, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+            except OSError:
+                pass
+
+    def list_sessions(self) -> list[dict]:
+        results: list[dict] = []
+        for fp in sorted(self._base.glob("session_*.json"), reverse=True):
+            try:
+                results.append(json.loads(fp.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+        return results
+
+    def delete_session(self, session_id: str) -> None:
+        (self._base / f"session_{session_id}.json").unlink(missing_ok=True)
+
+
+# ════════════════════════════════════════════════════════════════
+#  API KEY DIALOG  (secure — key stays in memory only)
+# ════════════════════════════════════════════════════════════════
+
+class _APIKeyDialog(ctk.CTkToplevel):
+    """Modal dialog to securely collect the Groq API key at runtime.
+
+    The key is:
+    • Masked with bullets while typing
+    • Stored only in ``self.api_key`` (in-memory)
+    • NEVER written to disk, config files, or environment
+    • Discarded when the dialog is garbage-collected
+    """
+
+    def __init__(self, parent: ctk.CTk) -> None:
+        super().__init__(parent)
+        self.title("🔑  Groq API Key")
+        self.geometry("560x310")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        self.api_key: Optional[str] = None
+
+        self.update_idletasks()
+        px = parent.winfo_x() + (parent.winfo_width()  - 560) // 2
+        py = parent.winfo_y() + (parent.winfo_height() - 310) // 2
+        self.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+
+        wrap = ctk.CTkFrame(self, fg_color="transparent")
+        wrap.pack(fill="both", expand=True, padx=32, pady=24)
+
+        ctk.CTkLabel(
+            wrap, text="🔑  Groq API Key Required",
+            font=ctk.CTkFont(size=20, weight="bold"),
+        ).pack(pady=(0, 6))
+
+        ctk.CTkLabel(
+            wrap,
+            text="Your key is used for this session only.\n"
+                 "It is NEVER saved to disk or transmitted anywhere\n"
+                 "except directly to the Groq API.",
+            font=ctk.CTkFont(size=12),
+            text_color=Colors.TEXT_SECONDARY,
+            justify="center",
+        ).pack(pady=(0, 14))
+
+        ctk.CTkLabel(
+            wrap,
+            text="Get a free key → console.groq.com/keys",
+            font=ctk.CTkFont(size=11),
+            text_color=Colors.ACCENT_GREEN,
+        ).pack(pady=(0, 12))
+
+        self._entry = ctk.CTkEntry(
+            wrap, placeholder_text="gsk_…", width=460, height=44,
+            font=ctk.CTkFont(size=14), show="•",
+            border_color="#28284a",
+        )
+        self._entry.pack(pady=(0, 16))
+        self._entry.bind("<Return>", lambda _: self._submit())
+        self._entry.focus()
+
+        btn_row = ctk.CTkFrame(wrap, fg_color="transparent")
+        btn_row.pack()
+
+        ctk.CTkButton(
+            btn_row, text="Continue  →", height=42, width=180,
+            font=ctk.CTkFont(size=15, weight="bold"),
+            fg_color=Colors.SEND_BTN, hover_color=Colors.SEND_BTN_HOVER,
+            command=self._submit,
+        ).pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(
+            btn_row, text="Cancel", height=42, width=100,
+            font=ctk.CTkFont(size=13),
+            fg_color=Colors.CLEAR_BTN, hover_color=Colors.CLEAR_BTN_HOVER,
+            command=self.destroy,
+        ).pack(side="left")
+
+    def _submit(self) -> None:
+        key = self._entry.get().strip()
+        if key:
+            self.api_key = key
+            # clear the entry widget immediately for safety
+            self._entry.delete(0, "end")
+            self.destroy()
+
+
+# ════════════════════════════════════════════════════════════════
+#  HISTORY BROWSER DIALOG
+# ════════════════════════════════════════════════════════════════
+
+class _HistoryDialog(ctk.CTkToplevel):
+    def __init__(self, parent: ctk.CTk, history: HistoryManager,
+                 on_load: callable) -> None:
+        super().__init__(parent)
+        self.title("📚  Session History")
+        self.geometry("660x520")
+        self.minsize(500, 350)
+        self.transient(parent)
+        self.grab_set()
+        self.update_idletasks()
+        px = parent.winfo_x() + (parent.winfo_width()  - 660) // 2
+        py = parent.winfo_y() + (parent.winfo_height() - 520) // 2
+        self.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+        self._history = history
+        self._on_load = on_load
+
+        hdr = ctk.CTkFrame(self, fg_color="transparent")
+        hdr.pack(fill="x", padx=20, pady=(16, 4))
+        ctk.CTkLabel(hdr, text="📚  Past Sessions",
+                     font=ctk.CTkFont(size=20, weight="bold")).pack(side="left")
+        ctk.CTkLabel(hdr, text=f"Saved in: {config.HISTORY_DIR}",
+                     font=ctk.CTkFont(size=10),
+                     text_color=Colors.TEXT_SECONDARY).pack(side="right")
+
+        self._scroll = ctk.CTkScrollableFrame(
+            self, fg_color=Colors.BG_SECONDARY, corner_radius=12)
+        self._scroll.pack(fill="both", expand=True, padx=20, pady=12)
+        self._scroll.grid_columnconfigure(0, weight=1)
+        self._populate()
+
+    def _populate(self) -> None:
+        for w in self._scroll.winfo_children():
+            w.destroy()
+        sessions = self._history.list_sessions()
+        if not sessions:
+            ctk.CTkLabel(self._scroll, text="No saved sessions yet.",
+                         font=ctk.CTkFont(size=14),
+                         text_color=Colors.TEXT_SECONDARY).pack(pady=40)
+            return
+        for sess in sessions[:80]:
+            self._card(sess)
+
+    def _card(self, sess: dict) -> None:
+        card = ctk.CTkFrame(self._scroll, fg_color=Colors.ASSISTANT_BUBBLE,
+                            corner_radius=10, border_width=1,
+                            border_color=Colors.ASSISTANT_BORDER)
+        card.pack(fill="x", pady=4, padx=4)
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.pack(fill="x", padx=12, pady=(10, 2))
+        started = sess.get("started", "?")[:16].replace("T", "  ")
+        ctk.CTkLabel(top, text=f"🗓  {started}",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+        ctk.CTkLabel(top, text=f"📚 {sess.get('level', '?')}",
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=Colors.ACCENT_GOLD).pack(side="left", padx=(12, 0))
+        ctk.CTkLabel(top, text=f"💬 {len(sess.get('messages', []))} msgs",
+                     font=ctk.CTkFont(size=11),
+                     text_color=Colors.TEXT_SECONDARY).pack(side="left", padx=(12, 0))
+        preview = ""
+        for m in sess.get("messages", []):
+            if m.get("role") == "user":
+                preview = m.get("content", "")[:90]
+                break
+        if preview:
+            ctk.CTkLabel(card,
+                         text=f"  \"{preview}{'…' if len(preview) >= 90 else ''}\"",
+                         font=ctk.CTkFont(size=11),
+                         text_color=Colors.TEXT_SECONDARY,
+                         anchor="w").pack(fill="x", padx=12, pady=(0, 2))
+        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row.pack(fill="x", padx=12, pady=(2, 10))
+        sid = sess.get("id", "")
+        ctk.CTkButton(btn_row, text="▶  Load", width=80, height=28,
+                      font=ctk.CTkFont(size=11, weight="bold"),
+                      fg_color=Colors.SEND_BTN, hover_color=Colors.SEND_BTN_HOVER,
+                      corner_radius=8,
+                      command=lambda s=sess: self._load(s)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_row, text="🗑  Delete", width=80, height=28,
+                      font=ctk.CTkFont(size=11),
+                      fg_color=Colors.CLEAR_BTN, hover_color=Colors.CLEAR_BTN_HOVER,
+                      corner_radius=8,
+                      command=lambda s=sid: self._delete(s)).pack(side="left")
+
+    def _load(self, sess: dict) -> None:
+        self._on_load(sess)
+        self.destroy()
+
+    def _delete(self, session_id: str) -> None:
+        self._history.delete_session(session_id)
+        self._populate()
+
+
+# ════════════════════════════════════════════════════════════════
+#  MAIN APPLICATION WINDOW
+# ════════════════════════════════════════════════════════════════
+
+class JapaneseTutorApp(ctk.CTk):
+
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.title("日本語 Sensei — Japanese Language Tutor")
+        self.geometry("1020x850")
+        self.minsize(820, 680)
+        self.configure(fg_color=Colors.BG_DARK)
+
+        self._is_recording: bool = False
+        self._is_processing: bool = False
+        self._timer_id: Optional[str] = None
+
+        # backends
+        self.audio = AudioManager()
+        self.whisper = WhisperTranscriber()
+        self.chat: Optional[GroqChat] = None
+        self.history = HistoryManager()
+        self.tts = TTSEngine()
+
+        # speech input language (Whisper)
+        self._whisper_lang: Optional[str] = (
+            config.INPUT_LANGUAGES[config.DEFAULT_INPUT_LANG]
+        )
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._build_ui()
+        self.after(250, self._init_backends)
+
+    # ────────────────────────────────────────────────────────────
+    #  SHUTDOWN
+    # ────────────────────────────────────────────────────────────
+
+    def _on_close(self) -> None:
+        try:
+            self.tts.shutdown()
+        except Exception:
+            pass
+        self.destroy()
+
+    # ────────────────────────────────────────────────────────────
+    #  BACKEND INIT  (secure API key flow)
+    # ────────────────────────────────────────────────────────────
+
+    def _init_backends(self) -> None:
+        """Initialize all backends.
+
+        API key acquisition priority:
+        1. ``GROQ_API_KEY`` environment variable  (CI / power users)
+        2. Secure in-app modal dialog             (everyone else)
+
+        The key is passed directly to ``GroqChat.__init__`` and
+        held only in the Groq client's memory.  It is **never**
+        written to any file, config, or environment variable.
+        """
+        api_key = config.GROQ_API_KEY          # from env var
+
+        if not api_key:
+            dlg = _APIKeyDialog(self)
+            self.wait_window(dlg)
+            api_key = dlg.api_key              # from dialog (or None)
+            if not api_key:
+                self._status("❌  No API key provided — exiting …")
+                self.after(3000, self.destroy)
+                return
+
+        try:
+            self.chat = GroqChat(api_key=api_key)
+        except Exception as exc:
+            self._status(f"❌  Groq init failed: {exc}")
+            return
+
+        # Discard local reference — only GroqChat holds the key now
+        del api_key
+
+        tts_ok = self.tts.initialize()
+        if tts_ok:
+            self._status("🔊  TTS ready  •  ⏳  Loading Whisper model …")
+        else:
+            self._status("⚠  TTS unavailable  •  ⏳  Loading Whisper …")
+            self.tts_toggle_btn.configure(
+                text="🔇  No TTS", state="disabled",
+                fg_color=Colors.TTS_OFF)
+
+        def _load() -> None:
+            try:
+                self.whisper.load()
+                self.after(0, self._on_whisper_ready)
+            except Exception as exc:
+                self.after(0, lambda: self._status(f"❌  Whisper: {exc}"))
+
+        threading.Thread(target=_load, daemon=True).start()
+
+    def _on_whisper_ready(self) -> None:
+        self._status("✅  All systems ready — speak or type!")
+        self.ptt_btn.configure(state="normal")
+        self.send_btn.configure(state="normal")
+        self.txt_entry.configure(state="normal")
+
+    # ────────────────────────────────────────────────────────────
+    #  UI BUILD
+    # ────────────────────────────────────────────────────────────
+
+    def _build_ui(self) -> None:
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self._build_header()
+        self._build_chat_area()
+        self._build_input_area()
+        self._build_status_bar()
+
+    # ── header ──────────────────────────────────────────────────
+
+    def _build_header(self) -> None:
+        hdr = ctk.CTkFrame(self, fg_color=Colors.HEADER_BG, corner_radius=0)
+        hdr.grid(row=0, column=0, sticky="ew")
+        pad = ctk.CTkFrame(hdr, fg_color="transparent")
+        pad.pack(fill="x", padx=22, pady=(14, 12))
+        pad.grid_columnconfigure(3, weight=1)
+
+        # row 0: title
+        tbox = ctk.CTkFrame(pad, fg_color="transparent")
+        tbox.grid(row=0, column=0, columnspan=9, sticky="w", pady=(0, 12))
+        ctk.CTkLabel(tbox, text="日本語",
+                     font=ctk.CTkFont(size=32, weight="bold"),
+                     text_color=Colors.ACCENT_RED).pack(side="left")
+        ctk.CTkLabel(tbox, text=" Sensei",
+                     font=ctk.CTkFont(size=32, weight="bold"),
+                     text_color=Colors.TEXT_PRIMARY).pack(side="left")
+        ctk.CTkLabel(tbox, text="    🎌  Immersive Japanese Tutor",
+                     font=ctk.CTkFont(size=13),
+                     text_color=Colors.TEXT_SECONDARY
+                     ).pack(side="left", padx=(8, 0))
+
+        # row 1: mic + language + level + buttons
+        col = 0
+
+        ctk.CTkLabel(pad, text="🎙  Mic:",
+                     font=ctk.CTkFont(size=13, weight="bold")
+                     ).grid(row=1, column=col, sticky="w", padx=(0, 6))
+        col += 1
+
+        devs = AudioManager.list_input_devices()
+        names = [d[1] for d in devs] or ["No input devices"]
+        self._dev_map: dict[str, int] = {d[1]: d[0] for d in devs}
+        self.mic_cb = ctk.CTkComboBox(
+            pad, values=names, width=260, command=self._on_mic_changed,
+            font=ctk.CTkFont(size=12), dropdown_font=ctk.CTkFont(size=11),
+            state="readonly")
+        self.mic_cb.grid(row=1, column=col, sticky="w", padx=(0, 12))
+        if devs:
+            self.mic_cb.set(names[0])
+            self.audio.set_device(devs[0][0])
+        col += 1
+
+        ctk.CTkLabel(pad, text="🗣  Speak:",
+                     font=ctk.CTkFont(size=13, weight="bold")
+                     ).grid(row=1, column=col, sticky="w", padx=(0, 6))
+        col += 1
+
+        lang_names = list(config.INPUT_LANGUAGES.keys())
+        self.lang_cb = ctk.CTkComboBox(
+            pad, values=lang_names, width=145,
+            command=self._on_input_lang_changed,
+            font=ctk.CTkFont(size=12), state="readonly")
+        self.lang_cb.set(config.DEFAULT_INPUT_LANG)
+        self.lang_cb.grid(row=1, column=col, sticky="w", padx=(0, 12))
+        col += 1
+
+        ctk.CTkFrame(pad, fg_color="transparent").grid(
+            row=1, column=col, sticky="ew")
+        col += 1
+
+        ctk.CTkLabel(pad, text="📚  Level:",
+                     font=ctk.CTkFont(size=13, weight="bold")
+                     ).grid(row=1, column=col, sticky="e", padx=(0, 6))
+        col += 1
+
+        self.lvl_cb = ctk.CTkComboBox(
+            pad, values=config.JLPT_LEVELS, width=120,
+            command=self._on_level_changed,
+            font=ctk.CTkFont(size=12), state="readonly")
+        self.lvl_cb.set("A0.1")
+        self.lvl_cb.grid(row=1, column=col, sticky="e", padx=(0, 10))
+        col += 1
+
+        ctk.CTkButton(pad, text="📂", width=36, height=30,
+                      font=ctk.CTkFont(size=14),
+                      fg_color=Colors.HISTORY_BTN,
+                      hover_color=Colors.HISTORY_BTN_HOVER,
+                      command=self._open_history
+                      ).grid(row=1, column=col, sticky="e", padx=(0, 4))
+        col += 1
+
+        ctk.CTkButton(pad, text="🗑", width=36, height=30,
+                      font=ctk.CTkFont(size=14),
+                      fg_color=Colors.CLEAR_BTN,
+                      hover_color=Colors.CLEAR_BTN_HOVER,
+                      command=self._clear_chat
+                      ).grid(row=1, column=col, sticky="e")
+
+        # row 2: separator
+        ctk.CTkFrame(pad, height=1, fg_color="#1c1c3a").grid(
+            row=2, column=0, columnspan=col + 1, sticky="ew", pady=(10, 8))
+
+        # row 3: TTS controls
+        tc = 0
+        ctk.CTkLabel(pad, text="🔊  Voice:",
+                     font=ctk.CTkFont(size=13, weight="bold")
+                     ).grid(row=3, column=tc, sticky="w", padx=(0, 6))
+        tc += 1
+
+        self.tts_toggle_btn = ctk.CTkButton(
+            pad, text="🔊  Voice ON", width=120, height=30,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=Colors.TTS_ON, hover_color=Colors.TTS_ON_HOVER,
+            corner_radius=8, command=self._toggle_tts)
+        self.tts_toggle_btn.grid(row=3, column=tc, sticky="w", padx=(0, 14))
+        tc += 1
+
+        ctk.CTkLabel(pad, text="🗣:",
+                     font=ctk.CTkFont(size=13, weight="bold")
+                     ).grid(row=3, column=tc + 2, sticky="e", padx=(0, 4))
+
+        voice_names = list(config.TTS_VOICES.keys())
+        self.voice_cb = ctk.CTkComboBox(
+            pad, values=voice_names, width=170,
+            command=self._on_voice_changed,
+            font=ctk.CTkFont(size=11), state="readonly")
+        self.voice_cb.set(voice_names[0])
+        self.voice_cb.grid(row=3, column=tc + 3, sticky="e", padx=(0, 10))
+
+        ctk.CTkLabel(pad, text="⏩:",
+                     font=ctk.CTkFont(size=13, weight="bold")
+                     ).grid(row=3, column=tc + 4, sticky="e", padx=(0, 4))
+
+        rate_names = list(config.TTS_RATES.keys())
+        self.rate_cb = ctk.CTkComboBox(
+            pad, values=rate_names, width=105,
+            command=self._on_rate_changed,
+            font=ctk.CTkFont(size=11), state="readonly")
+        self.rate_cb.set("Normal")
+        self.rate_cb.grid(row=3, column=tc + 5, sticky="e")
+
+    # ── chat area ───────────────────────────────────────────────
+
+    def _build_chat_area(self) -> None:
+        self.chat_scroll = ctk.CTkScrollableFrame(
+            self, fg_color=Colors.BG_SECONDARY, corner_radius=14,
+            border_width=1, border_color=Colors.CHAT_BORDER,
+            scrollbar_button_color="#252548",
+            scrollbar_button_hover_color="#38386a")
+        self.chat_scroll.grid(row=1, column=0, sticky="nsew", padx=20, pady=8)
+        self.chat_scroll.grid_columnconfigure(0, weight=1)
+
+        self._bubble(
+            "assistant",
+            "こんにちは！👋  Welcome to 日本語 Sensei!\n\n"
+            "I'm your personal Japanese tutor using the 70/30 method:\n"
+            "  📖  70% — I'll give you Japanese stories & context\n"
+            "  ✍️  30% — Then a task for YOU to respond to!\n\n"
+            "Getting started:\n"
+            "  •  Pick your mic and level above\n"
+            "  •  Set 🗣 Speak to 🇯🇵 Japanese for speech input\n"
+            "  •  Hold 🎤 to speak, or type below\n"
+            "  •  Beginners → try A0.1 (just single words!)\n\n"
+            "一緒に日本語を勉強しましょう！ 🌸",
+        )
+
+    # ── input area ──────────────────────────────────────────────
+
+    def _build_input_area(self) -> None:
+        box = ctk.CTkFrame(self, fg_color="transparent")
+        box.grid(row=2, column=0, sticky="ew", padx=20, pady=(4, 10))
+        box.grid_columnconfigure(0, weight=1)
+
+        txt_row = ctk.CTkFrame(box, fg_color="transparent")
+        txt_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        txt_row.grid_columnconfigure(0, weight=1)
+
+        self.txt_entry = ctk.CTkEntry(
+            txt_row, placeholder_text="✍  Type in Japanese or English …",
+            height=44, font=ctk.CTkFont(size=14),
+            corner_radius=10, border_color="#28284a", state="disabled")
+        self.txt_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.txt_entry.bind("<Return>", self._on_send_text)
+
+        self.send_btn = ctk.CTkButton(
+            txt_row, text="Send ➤", width=90, height=44,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=Colors.SEND_BTN, hover_color=Colors.SEND_BTN_HOVER,
+            corner_radius=10, command=self._on_send_text, state="disabled")
+        self.send_btn.grid(row=0, column=1)
+
+        self.vol_viz = VolumeVisualiser(box, self.audio)
+        self.vol_viz.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        ptt_frame = ctk.CTkFrame(box, fg_color="transparent")
+        ptt_frame.grid(row=2, column=0, sticky="ew")
+        ptt_frame.grid_columnconfigure(0, weight=1)
+
+        self.ptt_btn = ctk.CTkButton(
+            ptt_frame, text="🎤   Hold to Speak", height=60,
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=Colors.PTT_READY, hover_color=Colors.PTT_READY_HOVER,
+            border_width=2, border_color=Colors.PTT_READY_BORDER,
+            corner_radius=14, state="disabled")
+        self.ptt_btn.grid(row=0, column=0, sticky="ew")
+        self.ptt_btn.bind("<ButtonPress-1>", self._ptt_press)
+        self.ptt_btn.bind("<ButtonRelease-1>", self._ptt_release)
+
+        self.lang_badge = ctk.CTkLabel(
+            ptt_frame, text=self._lang_badge_text(),
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=Colors.TEXT_PRIMARY,
+            fg_color=Colors.LANG_JP,
+            corner_radius=6, width=100, height=24)
+        self.lang_badge.grid(row=0, column=1, padx=(8, 0))
+
+        info_row = ctk.CTkFrame(box, fg_color="transparent")
+        info_row.grid(row=3, column=0, sticky="ew", pady=(2, 0))
+        info_row.grid_columnconfigure(0, weight=1)
+        self.save_lbl = ctk.CTkLabel(
+            info_row, text="💾  Auto-save active",
+            font=ctk.CTkFont(size=10), text_color="#445544")
+        self.save_lbl.grid(row=0, column=0, sticky="w")
+        self.dur_label = ctk.CTkLabel(
+            info_row, text="", font=ctk.CTkFont(size=11),
+            text_color=Colors.TEXT_SECONDARY)
+        self.dur_label.grid(row=0, column=1, sticky="e")
+
+    # ── status bar ──────────────────────────────────────────────
+
+    def _build_status_bar(self) -> None:
+        bar = ctk.CTkFrame(self, height=28, fg_color=Colors.STATUS_BAR,
+                           corner_radius=0)
+        bar.grid(row=3, column=0, sticky="ew")
+        bar.grid_propagate(False)
+        self.status_lbl = ctk.CTkLabel(
+            bar, text="⏳  Initializing …",
+            font=ctk.CTkFont(size=11), text_color=Colors.TEXT_SECONDARY)
+        self.status_lbl.pack(side="left", padx=16, pady=2)
+        ctk.CTkLabel(
+            bar,
+            text=f"Whisper {config.WHISPER_MODEL_SIZE}  •  "
+                 f"LLM {config.GROQ_MODEL}  •  "
+                 f"TTS edge-tts  •  70/30 ratio",
+            font=ctk.CTkFont(size=10), text_color="#444466"
+        ).pack(side="right", padx=16, pady=2)
+
+    # ────────────────────────────────────────────────────────────
+    #  LANGUAGE BADGE
+    # ────────────────────────────────────────────────────────────
+
+    def _lang_badge_text(self) -> str:
+        if self._whisper_lang == "ja":
+            return "🇯🇵  JA"
+        if self._whisper_lang == "en":
+            return "🇬🇧  EN"
+        return "🌐  AUTO"
+
+    def _lang_badge_color(self) -> str:
+        if self._whisper_lang == "ja":
+            return Colors.LANG_JP
+        if self._whisper_lang == "en":
+            return Colors.LANG_EN
+        return Colors.LANG_AUTO
+
+    def _update_lang_badge(self) -> None:
+        self.lang_badge.configure(
+            text=self._lang_badge_text(),
+            fg_color=self._lang_badge_color())
+
+    # ────────────────────────────────────────────────────────────
+    #  CHAT BUBBLES
+    # ────────────────────────────────────────────────────────────
+
+    def _bubble(
+        self, role: str, text: str, *,
+        translatable: bool = False, speakable: bool = False,
+    ) -> None:
+        is_user = role == "user"
+        container = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
+        container.pack(fill="x", padx=4, pady=5)
+
+        fg = Colors.USER_BUBBLE if is_user else Colors.ASSISTANT_BUBBLE
+        bc = Colors.USER_BORDER if is_user else Colors.ASSISTANT_BORDER
+        bubble = ctk.CTkFrame(container, fg_color=fg, corner_radius=16,
+                              border_width=1, border_color=bc)
+        side = "right" if is_user else "left"
+        px = (90, 4) if is_user else (4, 90)
+        bubble.pack(side=side, padx=px)
+
+        tag = "You  🗣" if is_user else "Sensei  🎓"
+        tag_clr = Colors.ACCENT_GREEN if is_user else Colors.ACCENT_GOLD
+        ctk.CTkLabel(bubble, text=tag,
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=tag_clr).pack(anchor="w", padx=14, pady=(10, 0))
+
+        ctk.CTkLabel(bubble, text=text,
+                     font=ctk.CTkFont(size=14),
+                     text_color=Colors.TEXT_PRIMARY,
+                     wraplength=460, justify="left", anchor="w"
+                     ).pack(anchor="w", padx=14, pady=(4, 6))
+
+        if not is_user and (speakable or translatable):
+            self._attach_action_buttons(bubble, text, speakable, translatable)
+
+        self.after(60, self._scroll_bottom)
+
+    def _attach_action_buttons(
+        self, bubble: ctk.CTkFrame, original_text: str,
+        speakable: bool, translatable: bool,
+    ) -> None:
+        action_frame = ctk.CTkFrame(bubble, fg_color="transparent")
+        action_frame.pack(fill="x", padx=14, pady=(0, 10))
+        btn_row = ctk.CTkFrame(action_frame, fg_color="transparent")
+        btn_row.pack(anchor="w")
+
+        if speakable:
+            play_btn = ctk.CTkButton(
+                btn_row, text="🔊  Play", width=90, height=26,
+                font=ctk.CTkFont(size=11),
+                fg_color=Colors.TTS_PLAY, hover_color=Colors.TTS_PLAY_HOVER,
+                corner_radius=8)
+            play_btn.pack(side="left", padx=(0, 6))
+
+            def _play_click(btn: ctk.CTkButton = play_btn) -> None:
+                if self.tts.is_playing:
+                    self.tts.stop()
+                    btn.configure(text="🔊  Play")
+                    self._status("⏹  Stopped")
+                    return
+                if not self.tts.available:
+                    self._status("⚠  TTS not available")
+                    return
+                was_enabled = self.tts.enabled
+                if not was_enabled:
+                    self.tts._enabled = True
+                btn.configure(text="⏹  Stop")
+                self._status("🔊  Sensei is speaking …")
+
+                def _done() -> None:
+                    if not was_enabled:
+                        self.tts._enabled = False
+                    def _ui() -> None:
+                        btn.configure(text="🔊  Play")
+                        if not self._is_processing:
+                            self._status("✅  Ready")
+                    self.after(0, _ui)
+                self.tts.speak(original_text, on_done=_done)
+
+            play_btn.configure(command=_play_click)
+
+        if translatable:
+            trans_state: dict = {
+                "fetched": False, "visible": False,
+                "translation": "", "label": None, "busy": False,
+            }
+
+            def _toggle_translate() -> None:
+                if trans_state["busy"]:
+                    return
+                if trans_state["fetched"]:
+                    if trans_state["visible"]:
+                        if trans_state["label"]:
+                            trans_state["label"].pack_forget()
+                        tr_btn.configure(text="🔄  Translate")
+                        trans_state["visible"] = False
+                    else:
+                        if trans_state["label"]:
+                            trans_state["label"].pack(
+                                fill="x", padx=0, pady=(6, 0))
+                        tr_btn.configure(text="👁  Hide")
+                        trans_state["visible"] = True
+                    self.after(40, self._scroll_bottom)
+                    return
+
+                trans_state["busy"] = True
+                tr_btn.configure(text="⏳ …", state="disabled")
+
+                def _work() -> None:
+                    try:
+                        result = self.chat.translate(original_text)
+                        def _done() -> None:
+                            trans_state.update(
+                                translation=result, fetched=True,
+                                visible=True, busy=False)
+                            lbl = ctk.CTkLabel(
+                                action_frame, text=f"📝  {result}",
+                                font=ctk.CTkFont(size=12),
+                                text_color=Colors.TRANSLATE_TEXT,
+                                wraplength=420, justify="left", anchor="w")
+                            lbl.pack(fill="x", padx=0, pady=(6, 0))
+                            trans_state["label"] = lbl
+                            tr_btn.configure(text="👁  Hide", state="normal")
+                            self.after(40, self._scroll_bottom)
+                        self.after(0, _done)
+                    except Exception:
+                        def _err() -> None:
+                            trans_state["busy"] = False
+                            tr_btn.configure(text="❌  Retry", state="normal")
+                        self.after(0, _err)
+
+                threading.Thread(target=_work, daemon=True).start()
+
+            tr_btn = ctk.CTkButton(
+                btn_row, text="🔄  Translate", width=110, height=26,
+                font=ctk.CTkFont(size=11),
+                fg_color=Colors.TRANSLATE_BTN,
+                hover_color=Colors.TRANSLATE_HOVER,
+                corner_radius=8, command=_toggle_translate)
+            tr_btn.pack(side="left")
+
+    def _typing_indicator(self) -> ctk.CTkFrame:
+        ctr = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
+        ctr.pack(fill="x", padx=4, pady=5)
+        bub = ctk.CTkFrame(ctr, fg_color=Colors.ASSISTANT_BUBBLE,
+                           corner_radius=16, border_width=1,
+                           border_color=Colors.ASSISTANT_BORDER)
+        bub.pack(side="left", padx=(4, 90))
+        ctk.CTkLabel(bub, text="Sensei  🎓",
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=Colors.ACCENT_GOLD
+                     ).pack(anchor="w", padx=14, pady=(10, 0))
+        ctk.CTkLabel(bub, text="💭  Thinking …",
+                     font=ctk.CTkFont(size=14),
+                     text_color=Colors.TEXT_SECONDARY
+                     ).pack(anchor="w", padx=14, pady=(4, 12))
+        self.after(60, self._scroll_bottom)
+        return ctr
+
+    def _scroll_bottom(self) -> None:
+        try:
+            self.chat_scroll._parent_canvas.update_idletasks()
+            self.chat_scroll._parent_canvas.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    # ────────────────────────────────────────────────────────────
+    #  TTS CONTROLS
+    # ────────────────────────────────────────────────────────────
+
+    def _toggle_tts(self) -> None:
+        if not self.tts.available:
+            return
+        if self.tts.enabled:
+            self.tts.enabled = False
+            self.tts_toggle_btn.configure(
+                text="🔇  Voice OFF",
+                fg_color=Colors.TTS_OFF, hover_color=Colors.TTS_OFF_HOVER)
+            self._status("🔇  Voice output disabled")
+        else:
+            self.tts.enabled = True
+            self.tts_toggle_btn.configure(
+                text="🔊  Voice ON",
+                fg_color=Colors.TTS_ON, hover_color=Colors.TTS_ON_HOVER)
+            self._status("🔊  Voice output enabled")
+
+    def _on_voice_changed(self, name: str) -> None:
+        self.tts.set_voice(name)
+        self._status(f"🗣  Voice → {name}")
+
+    def _on_rate_changed(self, name: str) -> None:
+        self.tts.set_rate(name)
+        self._status(f"⏩  Speed → {name}")
+
+    def _auto_speak(self, text: str) -> None:
+        if not self.tts.enabled:
+            return
+        self._status("🔊  Sensei is speaking …")
+        self.tts_toggle_btn.configure(
+            text="🔊  Speaking …",
+            fg_color=Colors.TTS_SPEAKING,
+            hover_color=Colors.TTS_SPEAKING_HOVER)
+
+        def _on_done() -> None:
+            def _ui() -> None:
+                if self.tts.enabled:
+                    self.tts_toggle_btn.configure(
+                        text="🔊  Voice ON",
+                        fg_color=Colors.TTS_ON,
+                        hover_color=Colors.TTS_ON_HOVER)
+                if not self._is_processing and not self._is_recording:
+                    self._status("✅  Ready")
+            self.after(0, _ui)
+        self.tts.speak(text, on_done=_on_done)
+
+    # ────────────────────────────────────────────────────────────
+    #  CONTROL CALLBACKS
+    # ────────────────────────────────────────────────────────────
+
+    def _on_mic_changed(self, name: str) -> None:
+        idx = self._dev_map.get(name)
+        if idx is not None:
+            self.audio.set_device(idx)
+            self._status(f"🎙  Mic → {name[:45]}")
+
+    def _on_input_lang_changed(self, name: str) -> None:
+        self._whisper_lang = config.INPUT_LANGUAGES.get(name)
+        self._update_lang_badge()
+        if self._whisper_lang == "ja":
+            hint = "Whisper will transcribe as Japanese (はい not \"hi\")"
+        elif self._whisper_lang == "en":
+            hint = "Whisper will transcribe as English"
+        else:
+            hint = "Whisper will auto-detect language"
+        self._status(f"🗣  {hint}")
+
+    def _on_level_changed(self, level: str) -> None:
+        if self.chat:
+            self.chat.set_level(level)
+        self.history.set_level(level)
+
+        level_hints = {
+            "A0.1": "Single-word responses only (0-100 words)",
+            "A0.2": "Binary choices: A or B? (100-250 words)",
+            "A0.3": "Simple sentences: Subject-Verb-Object (250-500 words)",
+            "Beginner": "Day-one learner, mostly English",
+            "Elementary": "Knows kana, bridging to N5",
+        }
+        hint = level_hints.get(level, f"JLPT {level}")
+
+        msg = (f"📚  Level → **{level}**\n"
+               f"📋  {hint}\n"
+               f"I'll adapt my teaching to this level.  続けましょう！")
+        self._bubble("assistant", msg)
+
+    def _clear_chat(self) -> None:
+        self.tts.stop()
+        for w in self.chat_scroll.winfo_children():
+            w.destroy()
+        if self.chat:
+            self.chat.clear_history()
+        self.history.new_session(self.lvl_cb.get())
+        self._bubble(
+            "assistant",
+            "🌸  Chat cleared!  Let's start fresh.\n"
+            "新しい会話を始めましょう！ What shall we talk about?")
+        self._flash_save("💾  New session started")
+
+    def _open_history(self) -> None:
+        _HistoryDialog(self, self.history, self._load_session)
+
+    def _load_session(self, sess: dict) -> None:
+        self.tts.stop()
+        for w in self.chat_scroll.winfo_children():
+            w.destroy()
+        level = sess.get("level", "A0.1")
+        messages = sess.get("messages", [])
+        if self.chat:
+            self.chat.load_history(messages, level)
+        self.lvl_cb.set(level)
+        self.history.set_level(level)
+        self._bubble(
+            "assistant",
+            f"📂  Restored session from "
+            f"{sess.get('started', '?')[:16].replace('T', '  ')}\n"
+            f"Level: {level}  •  {len(messages)} messages loaded")
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            self._bubble(role, content,
+                         translatable=(role == "assistant"),
+                         speakable=(role == "assistant"))
+        self.history._session = sess
+        self.history._path = (
+            Path(config.HISTORY_DIR) / f"session_{sess['id']}.json")
+        self._status(f"📂  Session restored  ({len(messages)} msgs)")
+
+    # ────────────────────────────────────────────────────────────
+    #  PUSH-TO-TALK
+    # ────────────────────────────────────────────────────────────
+
+    def _ptt_press(self, _evt: object = None) -> None:
+        if (str(self.ptt_btn.cget("state")) == "disabled"
+                or self._is_processing or self._is_recording
+                or not self.whisper.ready):
+            return
+
+        self.tts.stop()
+        self._is_recording = True
+        self.ptt_btn.configure(
+            text="🔴   Recording …",
+            fg_color=Colors.PTT_REC,
+            hover_color=Colors.PTT_REC_HOVER,
+            border_color=Colors.PTT_REC_BORDER)
+
+        lang_hint = self._lang_badge_text()
+        self._status(f"🔴  Recording [{lang_hint}] — release to stop")
+
+        try:
+            self.audio.start_recording()
+        except Exception as exc:
+            self._is_recording = False
+            self._reset_ptt()
+            self._status(f"❌  Mic error: {exc}")
+            return
+
+        self.vol_viz.activate()
+        self._tick_timer()
+
+    def _tick_timer(self) -> None:
+        if self._is_recording:
+            self.dur_label.configure(text=f"⏱  {self.audio.elapsed():.1f} s")
+            self.vol_viz.refresh()
+            self._timer_id = self.after(65, self._tick_timer)
+
+    def _ptt_release(self, _evt: object = None) -> None:
+        if not self._is_recording:
+            return
+        self._is_recording = False
+        if self._timer_id:
+            self.after_cancel(self._timer_id)
+            self._timer_id = None
+        self.vol_viz.deactivate()
+        self.ptt_btn.configure(
+            text="⏳   Processing …",
+            fg_color=Colors.PTT_PROC,
+            hover_color=Colors.PTT_PROC_HOVER,
+            border_color=Colors.PTT_PROC_BORDER)
+        self._status("⏳  Processing audio …")
+        threading.Thread(target=self._handle_voice, daemon=True).start()
+
+    def _handle_voice(self) -> None:
+        self._is_processing = True
+        try:
+            wav = self.audio.stop_recording()
+            if wav is None:
+                self.after(0, lambda: self._status(
+                    "⚠  Too short or silent — try again!"))
+                return
+
+            lang = self._whisper_lang
+
+            self.after(0, lambda: self._status("🔄  Transcribing …"))
+            text = self.whisper.transcribe(wav, language=lang)
+            try:
+                os.unlink(wav)
+            except OSError:
+                pass
+
+            if not text.strip():
+                self.after(0, lambda: self._status(
+                    "⚠  Couldn't recognise speech — try again!"))
+                return
+
+            def _show_user(t: str = text) -> None:
+                self._bubble("user", t)
+                self.history.add_message("user", t)
+            self.after(0, _show_user)
+
+            self.after(0, lambda: self._status("💭  Sensei is thinking …"))
+            ind_ready = threading.Event()
+            ind_holder: list[Optional[ctk.CTkFrame]] = [None]
+
+            def _show_ind() -> None:
+                ind_holder[0] = self._typing_indicator()
+                ind_ready.set()
+            self.after(0, _show_ind)
+            ind_ready.wait(timeout=2.0)
+
+            reply = self.chat.send(text)
+
+            def _show_reply(r: str = reply) -> None:
+                if ind_holder[0]:
+                    ind_holder[0].destroy()
+                self._bubble("assistant", r,
+                             translatable=True, speakable=True)
+                self.history.add_message("assistant", r)
+                self._flash_save()
+                if self.tts.enabled:
+                    self._auto_speak(r)
+                else:
+                    self._status("✅  Ready")
+            self.after(0, _show_reply)
+
+        except Exception as exc:
+            self.after(0, lambda: self._status(f"❌  {str(exc)[:90]}"))
+        finally:
+            self._is_processing = False
+            self.after(0, self._reset_ptt)
+            self.after(0, lambda: self.dur_label.configure(text=""))
+
+    # ────────────────────────────────────────────────────────────
+    #  TEXT INPUT
+    # ────────────────────────────────────────────────────────────
+
+    def _on_send_text(self, _evt: object = None) -> None:
+        if str(self.send_btn.cget("state")) == "disabled":
+            return
+        text = self.txt_entry.get().strip()
+        if not text or self._is_processing or self.chat is None:
+            return
+
+        self.tts.stop()
+        self.txt_entry.delete(0, "end")
+        self._bubble("user", text)
+        self.history.add_message("user", text)
+        self._is_processing = True
+        self.send_btn.configure(state="disabled")
+        indicator = self._typing_indicator()
+        self._status("💭  Sensei is thinking …")
+
+        def _work() -> None:
+            try:
+                reply = self.chat.send(text)
+                def _done(r: str = reply) -> None:
+                    indicator.destroy()
+                    self._bubble("assistant", r,
+                                 translatable=True, speakable=True)
+                    self.history.add_message("assistant", r)
+                    self._flash_save()
+                    self.send_btn.configure(state="normal")
+                    if self.tts.enabled:
+                        self._auto_speak(r)
+                    else:
+                        self._status("✅  Ready")
+                self.after(0, _done)
+            except Exception as exc:
+                def _err() -> None:
+                    indicator.destroy()
+                    self._status(f"❌  {str(exc)[:90]}")
+                    self.send_btn.configure(state="normal")
+                self.after(0, _err)
+            finally:
+                self._is_processing = False
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    # ────────────────────────────────────────────────────────────
+    #  HELPERS
+    # ────────────────────────────────────────────────────────────
+
+    def _status(self, msg: str) -> None:
+        self.status_lbl.configure(text=msg)
+
+    def _reset_ptt(self) -> None:
+        self.ptt_btn.configure(
+            text="🎤   Hold to Speak",
+            fg_color=Colors.PTT_READY,
+            hover_color=Colors.PTT_READY_HOVER,
+            border_color=Colors.PTT_READY_BORDER)
+
+    def _flash_save(self, text: str = "💾  Auto-saved") -> None:
+        self.save_lbl.configure(text=text, text_color=Colors.ACCENT_GREEN)
+        self.after(2500, lambda: self.save_lbl.configure(
+            text="💾  Auto-save active", text_color="#445544"))
