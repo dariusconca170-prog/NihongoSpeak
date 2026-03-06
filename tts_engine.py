@@ -311,12 +311,16 @@ class TTSEngine:
         os.close(fd)
         self._current_file = path
 
-        comm = edge_tts.Communicate(                   # type: ignore[union-attr]
-            text=text,
-            voice=self._voice,
-            rate=self._rate,
-        )
-        await comm.save(path)
+        try:
+            comm = edge_tts.Communicate(                   # type: ignore[union-attr]
+                text=text,
+                voice=self._voice,
+                rate=self._rate,
+            )
+            await comm.save(path)
+        except Exception:
+            # TTS synthesis failed — skip playback silently
+            return
 
         if self._stop_flag.is_set():
             return

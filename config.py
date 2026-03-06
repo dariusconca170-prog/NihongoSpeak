@@ -180,6 +180,39 @@ RATIO_REMINDER: str = (
 )
 
 
+def build_ratio_instruction(japanese_pct: int) -> str:
+    """Return a ratio instruction string for the given Japanese percentage.
+
+    *japanese_pct* is an integer 50–100 representing how much of the
+    response should be Japanese.  The remainder is English explanation /
+    output task.
+    """
+    english_pct = 100 - japanese_pct
+    return (
+        f"## CRITICAL — {japanese_pct}/{english_pct} Language Ratio Rule\n"
+        f"Every single response you write MUST follow this structure:\n\n"
+        f"**{japanese_pct}% — Comprehensible Input (Japanese):**\n"
+        f"  A short story, scenario, description, or contextual passage "
+        f"written in Japanese at the learner's level. Engaging, natural, "
+        f"and slightly above their current ability (i+1 comprehensible input).\n\n"
+        f"**{english_pct}% — Output Task / English Support:**\n"
+        f"  End EVERY message with a specific, actionable task that forces "
+        f"the learner to produce language — a direct question, fill-in-the-blank, "
+        f"or choice that requires a Japanese response. "
+        f"{'Use more English explanation to support the learner.' if japanese_pct <= 60 else 'Keep English minimal.'}\n\n"
+        f"Format: input first, then the task. The task must flow from the input."
+    )
+
+
+def build_ratio_reminder(japanese_pct: int) -> str:
+    english_pct = 100 - japanese_pct
+    return (
+        f"REMINDER: Your response MUST be approximately {japanese_pct}% Japanese "
+        f"comprehensible input and {english_pct}% output task / English support. "
+        f"Always end with a concrete task for the learner."
+    )
+
+
 # ═══════════════════════════════════════════════════════════════
 #  A0 LEVEL CONSTRAINTS
 # ═══════════════════════════════════════════════════════════════
@@ -329,9 +362,25 @@ _LEVEL_GUIDANCE: dict[str, str] = {
 #  SYSTEM PROMPT BUILDER
 # ═══════════════════════════════════════════════════════════════
 
-def get_system_prompt(level: str) -> str:
-    """Return a detailed system prompt tuned to *level*,
-    including the mandatory 70/30 ratio rule."""
+def get_system_prompt(
+    level: str,
+    japanese_pct: int = 70,
+    session_summary: str = "",
+    vocab_review: str = "",
+) -> str:
+    """Return a detailed system prompt tuned to *level*.
+
+    Parameters
+    ----------
+    level : str
+        JLPT / custom level string.
+    japanese_pct : int
+        Percentage of the response that should be Japanese (50-100).
+    session_summary : str
+        Optional summary of the previous session to inject.
+    vocab_review : str
+        Optional spaced-repetition words to review today.
+    """
     guidance = _LEVEL_GUIDANCE.get(level, _LEVEL_GUIDANCE["Any Level"])
 
     if level in ("N5", "N4", "N3", "N2", "N1"):
@@ -351,21 +400,31 @@ def get_system_prompt(level: str) -> str:
     else:
         level_label = level
 
-    return (
+    ratio_block = build_ratio_instruction(japanese_pct)
+    english_pct = 100 - japanese_pct
+
+    parts = [
         f"You are **Sensei (先生)**, a warm, friendly, and encouraging "
         f"Japanese-language tutor.\n"
-        f"The learner is studying at the **{level_label}** level.\n\n"
-        f"## Language guidelines\n{guidance}\n\n"
-        f"{RATIO_INSTRUCTION}\n\n"
-        f"## General conversation rules\n"
-        f"1. ALWAYS follow the 70/30 input-output ratio above.\n"
+        f"The learner is studying at the **{level_label}** level.\n",
+        f"## Language guidelines\n{guidance}\n",
+        ratio_block,
+        f"\n## General conversation rules\n"
+        f"1. ALWAYS follow the {japanese_pct}/{english_pct} language ratio above.\n"
         f"2. When the learner makes a mistake, gently correct it and give a "
-        f"   one-line explanation.\n"
+        f"   one-line explanation. Use 「wrong」→「correct」 format for corrections.\n"
         f"3. Encourage the learner to use more Japanese each turn.\n"
         f"4. Weave in useful vocabulary or grammar organically.\n"
         f"5. Use emoji sparingly to keep the tone friendly.\n"
         f"6. If the learner writes entirely in English, reply partly in "
         f"   Japanese at their level to coax them into practising.\n"
         f"7. NEVER end a message without a concrete task or question "
-        f"   for the learner to respond to."
-    )
+        f"   for the learner to respond to.",
+    ]
+
+    if session_summary:
+        parts.append(f"\n{session_summary}")
+    if vocab_review:
+        parts.append(f"\n{vocab_review}")
+
+    return "\n\n".join(parts)

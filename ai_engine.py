@@ -200,7 +200,7 @@ class WhisperTranscriber:
 class GroqChat:
     """Stateful conversation wrapper around the Groq chat-completions API.
 
-    Every call to ``send()`` injects the 70/30 ratio reminder as a
+    Every call to ``send()`` injects the ratio reminder as a
     final system message so the model consistently structures its
     replies as comprehensible input + output task.
 
@@ -224,12 +224,28 @@ class GroqChat:
         self._model = model
         self._history: list[dict[str, str]] = []
         self._level: str = "A0.1"
+        self._japanese_pct: int = 70
+        self._session_summary: str = ""
+        self._vocab_review: str = ""
 
     # ── State ───────────────────────────────────────────────────
 
     def set_level(self, level: str) -> None:
         self._level = level
         self._history.clear()
+
+    def set_ratio(self, japanese_pct: int) -> None:
+        """Set the Japanese percentage (50-100)."""
+        self._japanese_pct = max(50, min(100, japanese_pct))
+
+    def set_session_context(
+        self,
+        session_summary: str = "",
+        vocab_review: str = "",
+    ) -> None:
+        """Inject previous-session summary and SRS words into the prompt."""
+        self._session_summary = session_summary
+        self._vocab_review = vocab_review
 
     def clear_history(self) -> None:
         self._history.clear()
@@ -252,10 +268,10 @@ class GroqChat:
         """Send *user_text* and return the assistant reply.
 
         The message list sent to Groq is structured as:
-        1. **System prompt** — persona + level + 70/30 rule
+        1. **System prompt** — persona + level + ratio rule + session context
         2. **Conversation history** — last 30 messages
         3. **Ratio reminder** — a final system nudge reinforcing
-           the 70/30 structure requirement
+           the ratio structure requirement
 
         This two-system-message sandwich ensures the model never
         "forgets" the ratio rule during long conversations.
@@ -263,17 +279,22 @@ class GroqChat:
         self._history.append({"role": "user", "content": user_text})
 
         messages: list[dict[str, str]] = [
-            # ── primary system prompt (persona + level + ratio rule)
+            # ── primary system prompt
             {
                 "role": "system",
-                "content": config.get_system_prompt(self._level),
+                "content": config.get_system_prompt(
+                    self._level,
+                    japanese_pct=self._japanese_pct,
+                    session_summary=self._session_summary,
+                    vocab_review=self._vocab_review,
+                ),
             },
             # ── conversation context (sliding window)
             *self._history[-30:],
-            # ── ratio enforcer (injected after user message)
+            # ── ratio enforcer
             {
                 "role": "system",
-                "content": config.RATIO_REMINDER,
+                "content": config.build_ratio_reminder(self._japanese_pct),
             },
         ]
 

@@ -24,6 +24,9 @@ from config import Colors
 from audio_manager import AudioManager
 from ai_engine import WhisperTranscriber, GroqChat
 from tts_engine import TTSEngine
+from vocab_tracker import VocabTracker
+from session_memory import build_previous_session_summary
+from pronunciation_scorer import score_pronunciation, format_score_badge
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -404,11 +407,18 @@ class JapaneseTutorApp(ctk.CTk):
         self.chat: Optional[GroqChat] = None
         self.history = HistoryManager()
         self.tts = TTSEngine()
+        self.vocab = VocabTracker()
+
+        # user-adjustable Japanese ratio (50-100%)
+        self._japanese_pct: int = 70
 
         # speech input language (Whisper)
         self._whisper_lang: Optional[str] = (
             config.INPUT_LANGUAGES[config.DEFAULT_INPUT_LANG]
         )
+
+        # last AI output — used for pronunciation scoring
+        self._last_expected_japanese: str = ""
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -460,6 +470,18 @@ class JapaneseTutorApp(ctk.CTk):
         # Discard local reference — only GroqChat holds the key now
         del api_key
 
+        # Inject previous-session context + SRS vocab
+        try:
+            summary = build_previous_session_summary()
+            vocab_prompt = self.vocab.get_review_prompt()
+            self.chat.set_session_context(
+                session_summary=summary,
+                vocab_review=vocab_prompt,
+            )
+            self.chat.set_ratio(self._japanese_pct)
+        except Exception:
+            pass
+
         tts_ok = self.tts.initialize()
         if tts_ok:
             self._status("🔊  TTS ready  •  ⏳  Loading Whisper model …")
@@ -492,9 +514,37 @@ class JapaneseTutorApp(ctk.CTk):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         self._build_header()
-        self._build_chat_area()
+        self._build_tabview()
         self._build_input_area()
         self._build_status_bar()
+
+    def _build_tabview(self) -> None:
+        """Build the main tabview containing chat and session review tabs."""
+        self._tabview = ctk.CTkTabview(
+            self,
+            fg_color=Colors.BG_SECONDARY,
+            segmented_button_fg_color=Colors.BG_DARK,
+            segmented_button_selected_color=Colors.SEND_BTN,
+            segmented_button_selected_hover_color=Colors.SEND_BTN_HOVER,
+            segmented_button_unselected_color=Colors.BG_SECONDARY,
+            corner_radius=14,
+            border_width=1,
+            border_color=Colors.CHAT_BORDER,
+        )
+        self._tabview.grid(row=1, column=0, sticky="nsew", padx=20, pady=8)
+        self._tabview.add("💬  Chat")
+        self._tabview.add("📖  Session Review")
+        self._tabview.add("📊  Vocabulary")
+        self._tabview.tab("💬  Chat").grid_columnconfigure(0, weight=1)
+        self._tabview.tab("💬  Chat").grid_rowconfigure(0, weight=1)
+        self._tabview.tab("📖  Session Review").grid_columnconfigure(0, weight=1)
+        self._tabview.tab("📖  Session Review").grid_rowconfigure(0, weight=1)
+        self._tabview.tab("📊  Vocabulary").grid_columnconfigure(0, weight=1)
+        self._tabview.tab("📊  Vocabulary").grid_rowconfigure(0, weight=1)
+
+        self._build_chat_area()
+        self._build_session_review_tab()
+        self._build_vocab_tab()
 
     # ── header ──────────────────────────────────────────────────
 
@@ -629,15 +679,52 @@ class JapaneseTutorApp(ctk.CTk):
         self.rate_cb.set("Normal")
         self.rate_cb.grid(row=3, column=tc + 5, sticky="e")
 
+        # row 4: separator
+        ctk.CTkFrame(pad, height=1, fg_color="#1c1c3a").grid(
+            row=4, column=0, columnspan=col + 1, sticky="ew", pady=(10, 8))
+
+        # row 5: Japanese ratio slider
+        ratio_row = ctk.CTkFrame(pad, fg_color="transparent")
+        ratio_row.grid(row=5, column=0, columnspan=col + 1, sticky="ew", pady=(0, 4))
+
+        ctk.CTkLabel(ratio_row, text="🇯🇵  Japanese ratio:",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+
+        self._ratio_label = ctk.CTkLabel(
+            ratio_row, text="70% JP / 30% EN",
+            font=ctk.CTkFont(size=12),
+            text_color=Colors.ACCENT_GOLD, width=130)
+        self._ratio_label.pack(side="left", padx=(8, 6))
+
+        self._ratio_slider = ctk.CTkSlider(
+            ratio_row, from_=50, to=100, number_of_steps=10,
+            width=200, command=self._on_ratio_changed)
+        self._ratio_slider.set(70)
+        self._ratio_slider.pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(ratio_row,
+                     text="50/50",
+                     font=ctk.CTkFont(size=10),
+                     text_color=Colors.TEXT_SECONDARY).pack(side="left")
+        self._ratio_hint = ctk.CTkLabel(
+            ratio_row, text="← adjust →",
+            font=ctk.CTkFont(size=10),
+            text_color=Colors.TEXT_SECONDARY)
+        self._ratio_hint.pack(side="left", padx=4)
+        ctk.CTkLabel(ratio_row,
+                     text="100% JP",
+                     font=ctk.CTkFont(size=10),
+                     text_color=Colors.TEXT_SECONDARY).pack(side="left")
+
     # ── chat area ───────────────────────────────────────────────
 
     def _build_chat_area(self) -> None:
+        parent = self._tabview.tab("💬  Chat")
         self.chat_scroll = ctk.CTkScrollableFrame(
-            self, fg_color=Colors.BG_SECONDARY, corner_radius=14,
-            border_width=1, border_color=Colors.CHAT_BORDER,
+            parent, fg_color="transparent", corner_radius=0,
             scrollbar_button_color="#252548",
             scrollbar_button_hover_color="#38386a")
-        self.chat_scroll.grid(row=1, column=0, sticky="nsew", padx=20, pady=8)
+        self.chat_scroll.grid(row=0, column=0, sticky="nsew")
         self.chat_scroll.grid_columnconfigure(0, weight=1)
 
         self._bubble(
@@ -653,6 +740,187 @@ class JapaneseTutorApp(ctk.CTk):
             "  •  Beginners → try A0.1 (just single words!)\n\n"
             "一緒に日本語を勉強しましょう！ 🌸",
         )
+
+    # ── session review tab ──────────────────────────────────────
+
+    def _build_session_review_tab(self) -> None:
+        parent = self._tabview.tab("📖  Session Review")
+        top = ctk.CTkFrame(parent, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="nsew")
+        top.grid_columnconfigure(0, weight=1)
+        top.grid_rowconfigure(1, weight=1)
+
+        # Controls row
+        ctrl = ctk.CTkFrame(top, fg_color="transparent")
+        ctrl.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+
+        ctk.CTkLabel(ctrl, text="📖  Session Review",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
+
+        ctk.CTkButton(
+            ctrl, text="🔄  Refresh", width=100, height=30,
+            font=ctk.CTkFont(size=12),
+            fg_color=Colors.HISTORY_BTN, hover_color=Colors.HISTORY_BTN_HOVER,
+            corner_radius=8, command=self._refresh_session_review,
+        ).pack(side="right", padx=(0, 4))
+
+        # Session selector
+        self._review_session_cb = ctk.CTkComboBox(
+            ctrl, values=["— pick a session —"], width=280,
+            font=ctk.CTkFont(size=11), state="readonly",
+            command=self._on_review_session_selected)
+        self._review_session_cb.pack(side="right", padx=(0, 8))
+
+        # Content scroll
+        self._review_scroll = ctk.CTkScrollableFrame(
+            top, fg_color=Colors.BG_DARK, corner_radius=10,
+            scrollbar_button_color="#252548")
+        self._review_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self._review_scroll.grid_columnconfigure(0, weight=1)
+
+        self._refresh_session_review()
+
+    def _refresh_session_review(self) -> None:
+        sessions = self.history.list_sessions()
+        if not sessions:
+            self._review_session_cb.configure(values=["— no sessions saved —"])
+            return
+        labels = []
+        self._review_sessions_map: dict[str, dict] = {}
+        for s in sessions[:50]:
+            started = s.get("started", "")[:16].replace("T", " ")
+            label = f"{started}  [{s.get('level', '?')}]  {len(s.get('messages', []))} msgs"
+            labels.append(label)
+            self._review_sessions_map[label] = s
+        self._review_session_cb.configure(values=labels)
+        if labels:
+            self._review_session_cb.set(labels[0])
+            self._on_review_session_selected(labels[0])
+
+    def _on_review_session_selected(self, label: str) -> None:
+        for w in self._review_scroll.winfo_children():
+            w.destroy()
+        sess = getattr(self, "_review_sessions_map", {}).get(label)
+        if not sess:
+            return
+        messages = sess.get("messages", [])
+        vocab_seen: list[str] = []
+
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            is_assistant = role == "assistant"
+            fg = Colors.ASSISTANT_BUBBLE if is_assistant else Colors.USER_BUBBLE
+            bc = Colors.ASSISTANT_BORDER if is_assistant else Colors.USER_BORDER
+            tag = "Sensei 🎓" if is_assistant else "You 🗣"
+            tag_clr = Colors.ACCENT_GOLD if is_assistant else Colors.ACCENT_GREEN
+
+            card = ctk.CTkFrame(self._review_scroll, fg_color=fg,
+                                corner_radius=12, border_width=1, border_color=bc)
+            card.pack(fill="x", padx=4, pady=3)
+            ctk.CTkLabel(card, text=tag, font=ctk.CTkFont(size=10, weight="bold"),
+                         text_color=tag_clr).pack(anchor="w", padx=10, pady=(6, 0))
+
+            # Highlight corrections in assistant messages
+            display_text = content
+            if is_assistant and ("→" in content or "✗" in content):
+                import re as _re
+                corrections = _re.findall(r"「([^」]+)」\s*→\s*「([^」]+)」", content)
+                for wrong, correct in corrections:
+                    vocab_seen.append(wrong)
+                    display_text = display_text.replace(
+                        f"「{wrong}」→「{correct}」",
+                        f"⚠ 「{wrong}」→「{correct}」 ✓"
+                    )
+
+            ctk.CTkLabel(card, text=display_text,
+                         font=ctk.CTkFont(size=12),
+                         text_color=Colors.TEXT_PRIMARY,
+                         wraplength=550, justify="left", anchor="w"
+                         ).pack(anchor="w", padx=10, pady=(2, 8))
+
+        if vocab_seen:
+            vcard = ctk.CTkFrame(self._review_scroll,
+                                 fg_color="#1a1a10", corner_radius=10,
+                                 border_width=1, border_color=Colors.ACCENT_GOLD)
+            vcard.pack(fill="x", padx=4, pady=(8, 4))
+            ctk.CTkLabel(vcard, text="📚  Vocabulary corrected this session:",
+                         font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color=Colors.ACCENT_GOLD).pack(anchor="w", padx=10, pady=(8, 2))
+            ctk.CTkLabel(vcard, text="  •  " + "\n  •  ".join(set(vocab_seen)),
+                         font=ctk.CTkFont(size=12),
+                         text_color=Colors.TEXT_PRIMARY,
+                         justify="left", anchor="w").pack(anchor="w", padx=10, pady=(0, 8))
+
+    # ── vocab tab ───────────────────────────────────────────────
+
+    def _build_vocab_tab(self) -> None:
+        parent = self._tabview.tab("📊  Vocabulary")
+        top = ctk.CTkFrame(parent, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="nsew")
+        top.grid_columnconfigure(0, weight=1)
+        top.grid_rowconfigure(1, weight=1)
+
+        ctrl = ctk.CTkFrame(top, fg_color="transparent")
+        ctrl.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        ctk.CTkLabel(ctrl, text="📊  Tracked Vocabulary  (Spaced Repetition)",
+                     font=ctk.CTkFont(size=15, weight="bold")).pack(side="left")
+        ctk.CTkButton(
+            ctrl, text="🔄  Refresh", width=90, height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color=Colors.HISTORY_BTN, hover_color=Colors.HISTORY_BTN_HOVER,
+            corner_radius=8, command=self._refresh_vocab_tab,
+        ).pack(side="right")
+
+        self._vocab_scroll = ctk.CTkScrollableFrame(
+            top, fg_color=Colors.BG_DARK, corner_radius=10,
+            scrollbar_button_color="#252548")
+        self._vocab_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self._vocab_scroll.grid_columnconfigure(0, weight=1)
+        self._vocab_scroll.grid_columnconfigure(1, weight=1)
+        self._vocab_scroll.grid_columnconfigure(2, weight=0)
+        self._vocab_scroll.grid_columnconfigure(3, weight=0)
+        self._refresh_vocab_tab()
+
+    def _refresh_vocab_tab(self) -> None:
+        for w in self._vocab_scroll.winfo_children():
+            w.destroy()
+
+        words = self.vocab.all_words()
+        due = {item["word"] for item in self.vocab.due_today()}
+
+        if not words:
+            ctk.CTkLabel(self._vocab_scroll,
+                         text="No vocabulary tracked yet.\n"
+                              "Words you struggle with will appear here.",
+                         font=ctk.CTkFont(size=13),
+                         text_color=Colors.TEXT_SECONDARY).pack(pady=40)
+            return
+
+        # Header
+        headers = ["Word", "Reading", "Struggles", "Next Review", "Level"]
+        for col, h in enumerate(headers):
+            ctk.CTkLabel(self._vocab_scroll, text=h,
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=Colors.TEXT_SECONDARY
+                         ).grid(row=0, column=col, sticky="w", padx=(6, 10), pady=(4, 2))
+
+        for row, item in enumerate(words, start=1):
+            word = item["word"]
+            is_due = word in due
+            clr = Colors.ACCENT_GOLD if is_due else Colors.TEXT_PRIMARY
+            cells = [
+                word,
+                item.get("reading", ""),
+                str(item.get("struggles", 0)),
+                item.get("next_review", ""),
+                str(item.get("level", 0)),
+            ]
+            for col, val in enumerate(cells):
+                ctk.CTkLabel(self._vocab_scroll, text=val,
+                             font=ctk.CTkFont(size=12),
+                             text_color=clr
+                             ).grid(row=row, column=col, sticky="w", padx=(6, 10), pady=1)
 
     # ── input area ──────────────────────────────────────────────
 
@@ -977,6 +1245,14 @@ class JapaneseTutorApp(ctk.CTk):
     #  CONTROL CALLBACKS
     # ────────────────────────────────────────────────────────────
 
+    def _on_ratio_changed(self, value: float) -> None:
+        pct = int(round(value / 10) * 10)  # snap to 10% increments
+        self._japanese_pct = pct
+        eng = 100 - pct
+        self._ratio_label.configure(text=f"{pct}% JP / {eng}% EN")
+        if self.chat:
+            self.chat.set_ratio(pct)
+
     def _on_mic_changed(self, name: str) -> None:
         idx = self._dev_map.get(name)
         if idx is not None:
@@ -1121,11 +1397,18 @@ class JapaneseTutorApp(ctk.CTk):
             lang = self._whisper_lang
 
             self.after(0, lambda: self._status("🔄  Transcribing …"))
-            text = self.whisper.transcribe(wav, language=lang)
             try:
-                os.unlink(wav)
-            except OSError:
-                pass
+                text = self.whisper.transcribe(wav, language=lang)
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._status(
+                    f"❌  Transcription failed: {str(e)[:80]}"))
+                self.after(0, lambda: self._show_retry_hint("transcription"))
+                return
+            finally:
+                try:
+                    os.unlink(wav)
+                except OSError:
+                    pass
 
             if not text.strip():
                 self.after(0, lambda: self._status(
@@ -1135,6 +1418,21 @@ class JapaneseTutorApp(ctk.CTk):
             def _show_user(t: str = text) -> None:
                 self._bubble("user", t)
                 self.history.add_message("user", t)
+
+                # Pronunciation scoring against last AI prompt
+                if self._last_expected_japanese and lang == "ja":
+                    try:
+                        result = score_pronunciation(
+                            self._last_expected_japanese, t)
+                        badge = format_score_badge(result)
+                        self._bubble_info(badge)
+                        # Log struggles
+                        if result.overall_score < 0.7:
+                            for mora, status in result.mora_scores:
+                                if status == "missing" and len(mora) > 1:
+                                    self.vocab.mark_struggle(mora)
+                    except Exception:
+                        pass
             self.after(0, _show_user)
 
             self.after(0, lambda: self._status("💭  Sensei is thinking …"))
@@ -1147,7 +1445,28 @@ class JapaneseTutorApp(ctk.CTk):
             self.after(0, _show_ind)
             ind_ready.wait(timeout=2.0)
 
-            reply = self.chat.send(text)
+            try:
+                reply = self.chat.send(text)
+            except Exception as exc:
+                self.after(0, lambda: ind_holder[0] and ind_holder[0].destroy())
+                self.after(0, lambda e=exc: self._status(
+                    f"❌  Groq API error: {str(e)[:80]}"))
+                self.after(0, lambda: self._show_retry_hint("AI response"))
+                return
+
+            # Extract Japanese portion for next pronunciation check
+            try:
+                import re as _re
+                jp_chars = _re.findall(r"[\u3040-\u9FFF]+", reply)
+                self._last_expected_japanese = " ".join(jp_chars[:3]) if jp_chars else ""
+            except Exception:
+                self._last_expected_japanese = ""
+
+            # Log corrections into vocab tracker
+            try:
+                self.vocab.extract_and_log(reply, text)
+            except Exception:
+                pass
 
             def _show_reply(r: str = reply) -> None:
                 if ind_holder[0]:
@@ -1163,7 +1482,7 @@ class JapaneseTutorApp(ctk.CTk):
             self.after(0, _show_reply)
 
         except Exception as exc:
-            self.after(0, lambda: self._status(f"❌  {str(exc)[:90]}"))
+            self.after(0, lambda e=exc: self._status(f"❌  {str(e)[:90]}"))
         finally:
             self._is_processing = False
             self.after(0, self._reset_ptt)
@@ -1192,6 +1511,21 @@ class JapaneseTutorApp(ctk.CTk):
         def _work() -> None:
             try:
                 reply = self.chat.send(text)
+
+                # Log any corrections into vocab tracker
+                try:
+                    self.vocab.extract_and_log(reply, text)
+                except Exception:
+                    pass
+
+                # Capture expected Japanese for next pronunciation check
+                try:
+                    import re as _re
+                    jp_chars = _re.findall(r"[\u3040-\u9FFF]+", reply)
+                    self._last_expected_japanese = " ".join(jp_chars[:3]) if jp_chars else ""
+                except Exception:
+                    pass
+
                 def _done(r: str = reply) -> None:
                     indicator.destroy()
                     self._bubble("assistant", r,
@@ -1205,10 +1539,11 @@ class JapaneseTutorApp(ctk.CTk):
                         self._status("✅  Ready")
                 self.after(0, _done)
             except Exception as exc:
-                def _err() -> None:
+                def _err(e: Exception = exc) -> None:
                     indicator.destroy()
-                    self._status(f"❌  {str(exc)[:90]}")
+                    self._status(f"❌  Groq error: {str(e)[:80]}")
                     self.send_btn.configure(state="normal")
+                    self._show_retry_hint("AI response")
                 self.after(0, _err)
             finally:
                 self._is_processing = False
@@ -1221,6 +1556,45 @@ class JapaneseTutorApp(ctk.CTk):
 
     def _status(self, msg: str) -> None:
         self.status_lbl.configure(text=msg)
+
+    def _bubble_info(self, text: str) -> None:
+        """Display a small informational pill below the last bubble."""
+        ctr = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
+        ctr.pack(fill="x", padx=4, pady=(0, 4))
+        ctk.CTkLabel(
+            ctr, text=text,
+            font=ctk.CTkFont(size=11),
+            text_color=Colors.TEXT_SECONDARY,
+            fg_color="#141428",
+            corner_radius=6,
+        ).pack(side="left", padx=(8, 0), ipadx=8, ipady=3)
+        self.after(60, self._scroll_bottom)
+
+    def _show_retry_hint(self, context: str = "") -> None:
+        """Show a retry hint in the chat when an error occurs."""
+        msg = f"⚠  {context.capitalize()} failed — you can try again."
+        ctr = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
+        ctr.pack(fill="x", padx=4, pady=3)
+
+        retry_frame = ctk.CTkFrame(ctr, fg_color="#2a0a0a", corner_radius=10,
+                                   border_width=1, border_color="#5a1a1a")
+        retry_frame.pack(side="left", padx=(4, 90))
+        ctk.CTkLabel(retry_frame, text=msg,
+                     font=ctk.CTkFont(size=12),
+                     text_color=Colors.ACCENT_RED
+                     ).pack(padx=12, pady=(8, 4))
+
+        def _retry() -> None:
+            retry_frame.destroy()
+            ctr.destroy()
+            self._status("🔄  Ready to try again — speak or type.")
+        ctk.CTkButton(retry_frame, text="🔄  Dismiss", width=90, height=26,
+                      font=ctk.CTkFont(size=11),
+                      fg_color=Colors.CLEAR_BTN,
+                      hover_color=Colors.CLEAR_BTN_HOVER,
+                      corner_radius=6, command=_retry
+                      ).pack(padx=12, pady=(0, 8))
+        self.after(60, self._scroll_bottom)
 
     def _reset_ptt(self) -> None:
         self.ptt_btn.configure(
