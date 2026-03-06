@@ -47,7 +47,7 @@ def _normalize(text: str) -> str:
 
 # Two-character morae: きゃ きゅ きょ etc.
 _DIGRAPHS = re.compile(
-    r"[きぎしじちぢにひびぴみりゐゑ][ゃゅょ]|[つ][ぁぃぇぉ]|っ[^]"
+    r"[きぎしじちぢにひびぴみりゐゑ][ゃゅょ]|[つ][ぁぃぇぉ]"
 )
 
 def _segment_mora(text: str) -> list[str]:
