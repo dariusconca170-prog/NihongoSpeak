@@ -278,24 +278,23 @@ class GroqChat:
         """
         self._history.append({"role": "user", "content": user_text})
 
+        # Groq requires all system messages to appear before user/assistant turns.
+        # We merge the ratio reminder into the primary system prompt instead of
+        # appending a second system message after the conversation history.
+        system_content = (
+            config.get_system_prompt(
+                self._level,
+                japanese_pct=self._japanese_pct,
+                session_summary=self._session_summary,
+                vocab_review=self._vocab_review,
+            )
+            + "\n\n"
+            + config.build_ratio_reminder(self._japanese_pct)
+        )
+
         messages: list[dict[str, str]] = [
-            # ── primary system prompt
-            {
-                "role": "system",
-                "content": config.get_system_prompt(
-                    self._level,
-                    japanese_pct=self._japanese_pct,
-                    session_summary=self._session_summary,
-                    vocab_review=self._vocab_review,
-                ),
-            },
-            # ── conversation context (sliding window)
+            {"role": "system", "content": system_content},
             *self._history[-30:],
-            # ── ratio enforcer
-            {
-                "role": "system",
-                "content": config.build_ratio_reminder(self._japanese_pct),
-            },
         ]
 
         try:
