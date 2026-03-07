@@ -76,6 +76,21 @@ set -a && source .env && set +a
 Leave the variable unset. The app will prompt you for the key on startup.
 The key is held in memory only and never written to disk.
 
+---
+
+## Structure
+
+```text
+├── main.py        <-- Entry point (loads src/)
+├── src/           <-- Source files (all .py logic)
+│   ├── app.py
+│   ├── ai_engine.py
+│   ├── config.py
+│   └── ...
+├── requirements.txt
+└── .env.example
+```
+
 ### 5. Run
 
 ```bash
