@@ -14,8 +14,8 @@ import os
 GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
-WHISPER_MODEL_SIZE: str = "base"
-WHISPER_DEVICE: str = "cpu"
+WHISPER_MODEL_SIZE: str = "medium"
+WHISPER_DEVICE: str = "cuda"
 WHISPER_COMPUTE_TYPE: str = "int8"
 
 # ── Audio Defaults ──────────────────────────────────────────────
