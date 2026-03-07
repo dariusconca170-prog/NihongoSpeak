@@ -22,7 +22,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
+.mcpignore
+.librechatignore
 # Environments
 .env
 .venv
