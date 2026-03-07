@@ -167,8 +167,8 @@ class NihongoSenseiApp:
                 ], alignment=ft.MainAxisAlignment.CENTER),
                 ft.Container(
                     content=self.chat_messages,
-                    expand=True,
-                    margin=ft.margin.only(top=20, bottom=20),
+                    expand=1,
+                    padding=ft.padding.symmetric(vertical=20),
                 ),
                 ft.Container(
                     content=ft.Row(
@@ -179,6 +179,7 @@ class NihongoSenseiApp:
                 )
             ],
             expand=True,
+            scroll=None,
         )
         return chat_layout
 
