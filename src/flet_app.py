@@ -91,6 +91,8 @@ class NihongoSenseiApp:
             self.content_container.content = self.get_review_view()
         elif view_id == "vocab":
             self.content_container.content = self.get_vocab_view()
+        elif view_id == "dashboard":
+            self.content_container.content = self.get_dashboard_view()
         elif view_id == "settings":
             self.content_container.content = self.get_settings_view()
         self.page.update()
@@ -194,16 +196,27 @@ class NihongoSenseiApp:
             )
         ], spacing=10)
 
-    def get_vocab_view(self):
+    def get_dashboard_view(self):
+        # Calculate stats from vocab tracker
+        all_words = self.vocab.all_words()
+        due = self.vocab.due_today()
+        
         return ft.Column([
-            ft.Text("Vocabulary Bank", size=24, weight="bold", color=Colors.TEXT_PRIMARY),
-            ft.Text("Track words you've learned and ones that need review.", color=Colors.TEXT_SECONDARY),
+            ft.Text("Progress Dashboard", size=24, weight="bold", color=Colors.TEXT_PRIMARY),
+            ft.Container(height=20),
+            ft.Row([
+                ModernCard(title="Total Vocabulary", content=ft.Text(str(len(all_words)), size=32, weight="bold")),
+                ModernCard(title="Due for Review", content=ft.Text(str(len(due)), size=32, weight="bold")),
+            ], spacing=20),
             ft.Container(height=20),
             ModernCard(
-                title="Recent Struggles",
-                content=ft.Text("No difficult words tracked yet. Keep chatting!", color=Colors.TEXT_SECONDARY)
+                title="Recent Needs Improvement",
+                content=ft.ListView(
+                    [ft.Text(f"• {w['word']} ({w['reading']}) - {w['struggles']} struggles", color=Colors.TEXT_SECONDARY) for w in all_words[:5]],
+                    height=200
+                )
             )
-        ], spacing=10)
+        ])
 
     def get_settings_view(self):
         self.api_key_input = ft.TextField(

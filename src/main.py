@@ -11,6 +11,9 @@ from __future__ import annotations
 import sys
 
 
+def safe_print(text: str) -> None:
+    print(text)
+
 def _check_deps() -> None:
     needed: dict[str, str] = {
         "flet":           "flet>=0.21.0",
