@@ -139,11 +139,57 @@ class WhisperTranscriber:
         self._model: Optional[WhisperModel] = None
 
     def load(self) -> None:
-        self._model = WhisperModel(
-            self._model_size,
-            device=self._device,
-            compute_type=self._compute_type,
-        )
+        """Load the Whisper model with device detection and a warm-up test."""
+        # Try CUDA first if 'auto' or 'cuda' is selected
+        use_cuda = self._device in ("auto", "cuda")
+        
+        if use_cuda:
+            try:
+                # 1. Try CUDA with int8_float16 (often more robust than float16)
+                print(f"--- Attempting Whisper load (CUDA, int8_float16) ---")
+                self._model = WhisperModel(
+                    self._model_size,
+                    device="cuda",
+                    compute_type="int8_float16"
+                )
+                
+                # 2. Warm-up test: transcribe a tiny silence buffer to verify the CUDA pipeline
+                # 16kHz, 0.5s of silence
+                import numpy as np
+                silence = np.zeros(8000, dtype=np.float32)
+                list(self._model.transcribe(silence)[0]) # consume the generator
+                
+                self._device = "cuda"
+                self._compute_type = "int8_float16"
+                print("--- Whisper loaded and verified on CUDA ---")
+                return
+            except Exception as exc:
+                print(f"--- CUDA load or warm-up failed: {exc} ---")
+                self._model = None # Clean up failed init
+        
+        # CPU Fallback
+        try:
+            target_compute = "int8" if self._compute_type in ("auto", "default") else self._compute_type
+            print(f"--- Loading Whisper on CPU ({self._model_size}, {target_compute}) ---")
+            self._model = WhisperModel(
+                self._model_size,
+                device="cpu",
+                compute_type=target_compute
+            )
+            self._device = "cpu"
+            self._compute_type = target_compute
+            print("--- Whisper loaded on CPU ---")
+        except Exception as exc:
+            print(f"--- CPU load failed: {exc} ---")
+            # Last resort: tiny model
+            if self._model_size != "tiny":
+                print("--- Attempting tiny model fallback on CPU ---")
+                self._model = WhisperModel("tiny", device="cpu", compute_type="int8")
+                self._model_size = "tiny"
+                self._device = "cpu"
+                self._compute_type = "int8"
+            else:
+                raise exc
 
     @property
     def ready(self) -> bool:
@@ -154,19 +200,35 @@ class WhisperTranscriber:
         audio_path: str,
         language: Optional[str] = None,
     ) -> str:
-        """Transcribe a WAV file to text.
-
-        Parameters
-        ----------
-        audio_path : str
-            Path to a 16-bit 16 kHz WAV file.
-        language : str or None
-            ``"ja"`` forces Japanese, ``"en"`` forces English,
-            ``None`` auto-detects.
-        """
+        """Transcribe a WAV file with an automatic runtime fallback to CPU if CUDA fails."""
         if self._model is None:
             raise RuntimeError("Model not loaded — call load() first.")
 
+        try:
+            return self._perform_transcribe(audio_path, language)
+        except Exception as exc:
+            # If CUDA fails at runtime, immediately try to reload on CPU and retry once
+            if self._device == "cuda":
+                print(f"--- Runtime CUDA transcription failed: {exc} ---")
+                print("--- Emergency fallback to CPU and retrying... ---")
+                try:
+                    self._model = WhisperModel(
+                        self._model_size,
+                        device="cpu",
+                        compute_type="int8"
+                    )
+                    self._device = "cpu"
+                    self._compute_type = "int8"
+                    return self._perform_transcribe(audio_path, language)
+                except Exception as cpu_exc:
+                    print(f"--- Emergency CPU fallback failed: {cpu_exc} ---")
+                    raise cpu_exc
+            else:
+                # If it failed on CPU already, just re-raise
+                raise exc
+
+    def _perform_transcribe(self, audio_path: str, language: Optional[str] = None) -> str:
+        """Internal transcription logic."""
         if language == "ja":
             initial_prompt = _WHISPER_PROMPT_JA
         elif language == "en":

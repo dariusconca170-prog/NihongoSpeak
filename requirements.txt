@@ -5,3 +5,9 @@ sounddevice>=0.5.0
 numpy>=1.26.0
 edge-tts>=6.1.0
 pygame>=2.5.0
+
+# CUDA Support (Windows/Linux)
+# If you have an NVIDIA GPU, run:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# And ensure you have the NVIDIA CT2 libraries installed.
+torch>=2.0.0; platform_system == "Windows" or platform_system == "Linux"

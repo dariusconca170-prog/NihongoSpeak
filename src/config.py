@@ -14,9 +14,9 @@ import os
 GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
-WHISPER_MODEL_SIZE: str = "medium"
-WHISPER_DEVICE: str = "cuda"
-WHISPER_COMPUTE_TYPE: str = "int8"
+WHISPER_MODEL_SIZE: str = "base"
+WHISPER_DEVICE: str = "auto"
+WHISPER_COMPUTE_TYPE: str = "default"
 
 # ── Audio Defaults ──────────────────────────────────────────────
 SAMPLE_RATE: int = 16000
@@ -83,70 +83,76 @@ TTS_RATES: dict[str, str] = {
 # ── UI Colour Palette ──────────────────────────────────────────
 
 class Colors:
-    BG_DARK           = "#09090f"
-    BG_SECONDARY      = "#101020"
-    HEADER_BG         = "#0c0c22"
-    CHAT_BORDER       = "#1c1c3a"
+    # Primary Palette
+    BG_DARK           = "#1a1a1a" # Almost black, for deep backgrounds
+    BG_SECONDARY      = "#2c2c2c" # Dark grey, for secondary panels
+    HEADER_BG         = "#232323" # Slightly lighter for the header
+    CHAT_BORDER       = "#4a4a4a" # Muted border color
 
-    USER_BUBBLE       = "#14392a"
-    USER_BORDER       = "#1f6b42"
-    ASSISTANT_BUBBLE  = "#161638"
-    ASSISTANT_BORDER  = "#28285a"
+    # Bubble Colors
+    USER_BUBBLE       = "#3a3a3a" # Darker bubble for the user
+    USER_BORDER       = "#5a5a5a" # Subtle border for user bubble
+    ASSISTANT_BUBBLE  = "#4a4a4a" # Lighter bubble for the assistant
+    ASSISTANT_BORDER  = "#6a6a6a" # Subtle border for assistant bubble
 
-    PTT_READY         = "#21754e"
-    PTT_READY_HOVER   = "#2a9d63"
-    PTT_READY_BORDER  = "#2fad6e"
-    PTT_REC           = "#a8201a"
-    PTT_REC_HOVER     = "#d62828"
-    PTT_REC_BORDER    = "#ef233c"
-    PTT_PROC          = "#c56e00"
-    PTT_PROC_HOVER    = "#e68a00"
-    PTT_PROC_BORDER   = "#f5a623"
+    # Push-to-Talk & Buttons
+    PTT_READY         = "#4CAF50" # Green for ready
+    PTT_READY_HOVER   = "#66BB6A" # Lighter green on hover
+    PTT_READY_BORDER  = "#81C784" # Even lighter for the border
+    PTT_REC           = "#f44336" # Red for recording
+    PTT_REC_HOVER     = "#ef5350" # Lighter red on hover
+    PTT_REC_BORDER    = "#e57373" # Even lighter for the border
+    PTT_PROC          = "#FFC107" # Amber for processing
+    PTT_PROC_HOVER    = "#FFD54F" # Lighter amber on hover
+    PTT_PROC_BORDER   = "#FFE082" # Even lighter for the border
 
-    SEND_BTN          = "#2563eb"
-    SEND_BTN_HOVER    = "#3b82f6"
-    CLEAR_BTN         = "#7f1d1d"
-    CLEAR_BTN_HOVER   = "#b91c1c"
-    HISTORY_BTN       = "#1e3a5f"
-    HISTORY_BTN_HOVER = "#264b7a"
+    SEND_BTN          = "#2196F3" # Blue for send
+    SEND_BTN_HOVER    = "#64B5F6" # Lighter blue on hover
+    CLEAR_BTN         = "#f44336" # Red for clear
+    CLEAR_BTN_HOVER   = "#ef5350" # Lighter red on hover
+    HISTORY_BTN       = "#607D8B" # Blue-grey for history
+    HISTORY_BTN_HOVER = "#78909C" # Lighter blue-grey on hover
 
-    ACCENT_GREEN      = "#81b29a"
-    ACCENT_GOLD       = "#f2cc8f"
-    ACCENT_RED        = "#e63946"
+    # Accents & Text
+    ACCENT_GREEN      = "#81C784" # Light green for success/accent
+    ACCENT_GOLD       = "#FFD54F" # Light amber for highlights
+    ACCENT_RED        = "#e57373" # Light red for errors/warnings
 
-    TEXT_PRIMARY      = "#eaeaea"
-    TEXT_SECONDARY    = "#8888a8"
-    STATUS_BAR        = "#060610"
+    TEXT_PRIMARY      = "#FFFFFF" # White for primary text
+    TEXT_SECONDARY    = "#B0BEC5" # Light grey for secondary text
+    STATUS_BAR        = "#1a1a1a" # Same as dark background
 
-    METER_BG          = "#0a0a18"
-    METER_BORDER      = "#1a1a35"
-    METER_IDLE        = "#252548"
-    METER_LOW         = "#22c55e"
-    METER_MID         = "#eab308"
-    METER_HIGH        = "#ef4444"
-    METER_GLOW_LOW    = "#15803d"
-    METER_GLOW_MID    = "#a16207"
-    METER_GLOW_HIGH   = "#991b1b"
+    # Volume Meter
+    METER_BG          = "#2c2c2c" # Dark grey background
+    METER_BORDER      = "#4a4a4a" # Muted border
+    METER_IDLE        = "#607D8B" # Blue-grey for idle
+    METER_LOW         = "#4CAF50" # Green for low volume
+    METER_MID         = "#FFC107" # Amber for medium volume
+    METER_HIGH        = "#f44336" # Red for high volume
+    METER_GLOW_LOW    = "#388E3C" # Darker green for glow
+    METER_GLOW_MID    = "#FFA000" # Darker amber for glow
+    METER_GLOW_HIGH   = "#D32F2F" # Darker red for glow
 
-    TRANSLATE_BTN     = "#1a1a3a"
-    TRANSLATE_HOVER   = "#252550"
-    TRANSLATE_TEXT     = "#7aaccf"
+    # Other UI Elements
+    TRANSLATE_BTN     = "#607D8B" # Blue-grey for translate
+    TRANSLATE_HOVER   = "#78909C" # Lighter blue-grey on hover
+    TRANSLATE_TEXT    = "#B0BEC5" # Light grey for translated text
 
-    TTS_ON            = "#1a5e3a"
-    TTS_ON_HOVER      = "#228b4e"
-    TTS_OFF           = "#2a2a3e"
-    TTS_OFF_HOVER     = "#3a3a52"
-    TTS_SPEAKING      = "#7c3aed"
-    TTS_SPEAKING_HOVER = "#8b5cf6"
-    TTS_PLAY          = "#1a1a3a"
-    TTS_PLAY_HOVER    = "#2a2a55"
+    TTS_ON            = "#4CAF50" # Green for TTS on
+    TTS_ON_HOVER      = "#66BB6A" # Lighter green on hover
+    TTS_OFF           = "#607D8B" # Blue-grey for TTS off
+    TTS_OFF_HOVER     = "#78909C" # Lighter blue-grey on hover
+    TTS_SPEAKING      = "#2196F3" # Blue for speaking
+    TTS_SPEAKING_HOVER= "#64B5F6" # Lighter blue on hover
+    TTS_PLAY          = "#607D8B" # Blue-grey for play
+    TTS_PLAY_HOVER    = "#78909C" # Lighter blue-grey on hover
 
-    LANG_JP           = "#b91c1c"
-    LANG_JP_HOVER     = "#dc2626"
-    LANG_EN           = "#1d4ed8"
-    LANG_EN_HOVER     = "#2563eb"
-    LANG_AUTO         = "#4a4a6a"
-    LANG_AUTO_HOVER   = "#5a5a7a"
+    LANG_JP           = "#f44336" # Red for Japanese
+    LANG_JP_HOVER     = "#ef5350" # Lighter red on hover
+    LANG_EN           = "#2196F3" # Blue for English
+    LANG_EN_HOVER     = "#64B5F6" # Lighter blue on hover
+    LANG_AUTO         = "#607D8B" # Blue-grey for auto
+    LANG_AUTO_HOVER   = "#78909C" # Lighter blue-grey on hover
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -154,29 +160,17 @@ class Colors:
 # ═══════════════════════════════════════════════════════════════
 
 RATIO_INSTRUCTION: str = (
-    "## CRITICAL — 70/30 Comprehensible Input Rule\n"
-    "Every single response you write MUST follow this structure:\n\n"
-    "**70% — Comprehensible Input (target language):**\n"
-    "  A short story, scenario, description, or contextual passage "
-    "written in Japanese at the learner's level. This should be "
-    "engaging, natural, and slightly above their current ability "
-    "(i+1 comprehensible input). Use context clues, repetition, "
-    "and cognates to make it understandable without translation.\n\n"
-    "**30% — Output Task (requires a response):**\n"
-    "  End EVERY message with a specific, actionable task that "
-    "forces the learner to produce language. This MUST be a direct "
-    "question, a fill-in-the-blank, a choice, or a prompt that "
-    "requires them to respond in Japanese. Never end a message "
-    "without giving the learner something concrete to answer.\n\n"
-    "Format your response clearly with the input first, then the "
-    "task. The task should flow naturally from the input content."
+    "## Your Persona: The 70/30 Language Partner\n"
+    "You are not a robot; you are a language learning partner. Your goal is to make learning feel like a natural conversation. Follow this simple, effective structure for every single message:\n\n"
+    "**1. The Immersion (about 70% of your message):**\n"
+    "   Start with a short story, a fun scenario, or a simple description in Japanese. This is the comprehensible input. It should be engaging and just a little bit challenging (i+1), using context to make it understandable without needing a direct translation.\n\n"
+    "**2. The Turn (about 30% of your message):**\n"
+    "   This is where you hand the conversation back to the learner. End EVERY message with a clear, simple task that prompts them to respond in Japanese. It could be a direct question, a fill-in-the-blank, or a choice. The key is to always give them a reason to reply.\n\n"
+    "Think of it as a friendly rally in a game of tennis. You serve the ball with a story, and they return it by answering your question. Keep the conversation flowing!"
 )
 
 RATIO_REMINDER: str = (
-    "REMINDER: Your response MUST contain ~70% comprehensible "
-    "Japanese input (a story/scenario/context) and ~30% output "
-    "task (a specific question or prompt the learner must answer). "
-    "Always end with a concrete task for the learner."
+    "Quick check-in: Remember our 70/30 flow! Start with a bit of a story or context in Japanese, then end with a simple question or task to keep the conversation going. Your turn!"
 )
 
 

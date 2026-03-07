@@ -43,6 +43,29 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+#### AMD GPU Users (Windows ROCm)
+
+If you have an AMD GPU on Windows, you can enable ROCm acceleration for much faster transcription:
+
+1. Download `rocm-python-wheels-Windows.zip`.
+2. Extract the wheels into a local folder (e.g., `C:\Downloads\rocm_wheels`).
+3. Install the entire batch using a wildcard (pip handles the dependencies between them):
+   ```powershell
+   # From your virtual environment:
+   pip install C:\Downloads\rocm_wheels\*.whl
+   ```
+4. Ensure your `config.py` is set to `WHISPER_DEVICE = "auto"`.
+
+*Note: We do not include these wheels directly in the repository because they are very large (>2GB) and platform-specific to Windows ROCm.*
+
+#### NVIDIA GPU Users (CUDA)
+
+If you have an NVIDIA GPU, install the CUDA-enabled torch:
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
 ### 4. Set your Groq API key
 
 Get a free key at [console.groq.com/keys](https://console.groq.com/keys).

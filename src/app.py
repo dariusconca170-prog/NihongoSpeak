@@ -498,7 +498,8 @@ class JapaneseTutorApp(ctk.CTk):
                 self.whisper.load()
                 self.after(0, self._on_whisper_ready)
             except Exception as exc:
-                self.after(0, lambda: self._status(f"❌  Whisper: {exc}"))
+                err_msg = str(exc)
+                self.after(0, lambda: self._status(f"❌  Whisper: {err_msg}"))
 
         threading.Thread(target=_load, daemon=True).start()
 
@@ -968,11 +969,11 @@ class JapaneseTutorApp(ctk.CTk):
 
         self.lang_badge = ctk.CTkLabel(
             ptt_frame, text=self._lang_badge_text(),
-            font=ctk.CTkFont(size=11, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             text_color=Colors.TEXT_PRIMARY,
             fg_color=Colors.LANG_JP,
-            corner_radius=6, width=100, height=24)
-        self.lang_badge.grid(row=0, column=1, padx=(8, 0))
+            corner_radius=16, width=100, height=32)
+        self.lang_badge.grid(row=0, column=1, padx=(12, 0))
 
         info_row = ctk.CTkFrame(box, fg_color="transparent")
         info_row.grid(row=3, column=0, sticky="ew", pady=(2, 0))
@@ -1428,27 +1429,41 @@ class JapaneseTutorApp(ctk.CTk):
     def _handle_voice(self) -> None:
         self._is_processing = True
         try:
-            wav = self.audio.stop_recording()
+            self.after(0, lambda: self._status("💾  Closing audio stream …"))
+            try:
+                wav = self.audio.stop_recording()
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._status(f"❌  Audio error: {e}"))
+                return
+
             if wav is None:
                 self.after(0, lambda: self._status(
                     "⚠  Too short or silent — try again!"))
                 return
 
             lang = self._whisper_lang
-
-            self.after(0, lambda: self._status("🔄  Transcribing …"))
+            self.after(0, lambda: self._status("🔄  Transcribing speech …"))
+            
             try:
                 text = self.whisper.transcribe(wav, language=lang)
             except Exception as exc:
                 self.after(0, lambda e=exc: self._status(
                     f"❌  Transcription failed: {str(e)[:80]}"))
+                # If we're on CPU now but we were on CUDA, it means the fallback worked but the retry failed
+                if self.whisper._device == "cpu":
+                    self.after(0, lambda: self._status("❌  CUDA failed — even CPU fallback failed!"))
                 self.after(0, lambda: self._show_retry_hint("transcription"))
                 return
             finally:
                 try:
-                    os.unlink(wav)
+                    if wav and os.path.exists(wav):
+                        os.unlink(wav)
                 except OSError:
                     pass
+
+            # Update status if we're now on CPU due to a runtime fallback
+            if self.whisper._device == "cpu" and lang == "ja":
+                self.after(0, lambda: self._status("⚠  Switched to CPU for stability"))
 
             if not text.strip():
                 self.after(0, lambda: self._status(
@@ -1476,16 +1491,18 @@ class JapaneseTutorApp(ctk.CTk):
             self.after(0, _show_user)
 
             self.after(0, lambda: self._status("💭  Sensei is thinking …"))
-            ind_ready = threading.Event()
+            
+            # Show typing indicator without blocking the thread
             ind_holder: list[Optional[ctk.CTkFrame]] = [None]
-
             def _show_ind() -> None:
                 ind_holder[0] = self._typing_indicator()
-                ind_ready.set()
             self.after(0, _show_ind)
-            ind_ready.wait(timeout=2.0)
 
             try:
+                # Add a bit of breathing room for the UI to update
+                import time as _time
+                _time.sleep(0.1) 
+                
                 reply = self.chat.send(text)
             except Exception as exc:
                 self.after(0, lambda: ind_holder[0] and ind_holder[0].destroy())
@@ -1522,7 +1539,7 @@ class JapaneseTutorApp(ctk.CTk):
             self.after(0, _show_reply)
 
         except Exception as exc:
-            self.after(0, lambda e=exc: self._status(f"❌  {str(e)[:90]}"))
+            self.after(0, lambda e=exc: self._status(f"❌  Unexpected error: {str(e)[:90]}"))
         finally:
             self._is_processing = False
             self.after(0, self._reset_ptt)
@@ -1643,7 +1660,7 @@ class JapaneseTutorApp(ctk.CTk):
             fg_color=Colors.PTT_READY,
             hover_color=Colors.PTT_READY_HOVER,
             border_color=Colors.PTT_READY_BORDER,
-        )
+            duration_ms=500) # Longer duration for a smoother feel
 
     def _flash_save(self, text: str = "💾  Auto-saved") -> None:
         self.save_lbl.configure(text=text, text_color=Colors.ACCENT_GREEN)
