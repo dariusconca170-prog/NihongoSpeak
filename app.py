@@ -398,6 +398,8 @@ class JapaneseTutorApp(ctk.CTk):
         self.configure(fg_color=Colors.BG_DARK)
 
         self._is_recording: bool = False
+        self._timer_id: Optional[str] = None
+        self._last_expected_japanese: str = ""
         self._is_processing: bool = False
         self._timer_id: Optional[str] = None
 
@@ -1043,8 +1045,12 @@ class JapaneseTutorApp(ctk.CTk):
         bubble = ctk.CTkFrame(container, fg_color=fg, corner_radius=16,
                               border_width=1, border_color=bc)
         side = "right" if is_user else "left"
-        px = (90, 4) if is_user else (4, 90)
-        bubble.pack(side=side, padx=px)
+        final_px = (90, 4) if is_user else (4, 90)
+        if is_user:
+            start_px = (final_px[0], final_px[1] + 48)
+        else:
+            start_px = (final_px[0] + 48, final_px[1])
+        bubble.pack(side=side, padx=start_px)
 
         tag = "You  🗣" if is_user else "Sensei  🎓"
         tag_clr = Colors.ACCENT_GREEN if is_user else Colors.ACCENT_GOLD
@@ -1061,7 +1067,19 @@ class JapaneseTutorApp(ctk.CTk):
         if not is_user and (speakable or translatable):
             self._attach_action_buttons(bubble, text, speakable, translatable)
 
-        self.after(60, self._scroll_bottom)
+        def _anim_pad(step: int = 0, steps: int = 8) -> None:
+            if not bubble.winfo_exists():
+                return
+            t = min(1.0, step / steps)
+            cur_left = int(start_px[0] + (final_px[0] - start_px[0]) * t)
+            cur_right = int(start_px[1] + (final_px[1] - start_px[1]) * t)
+            bubble.pack_configure(padx=(cur_left, cur_right))
+            if step < steps:
+                self.after(18, lambda: _anim_pad(step + 1, steps))
+            else:
+                bubble.pack_configure(padx=final_px)
+        _anim_pad()
+        self._smooth_scroll_bottom()
 
     def _attach_action_buttons(
         self, bubble: ctk.CTkFrame, original_text: str,
@@ -1178,10 +1196,18 @@ class JapaneseTutorApp(ctk.CTk):
                      font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=Colors.ACCENT_GOLD
                      ).pack(anchor="w", padx=14, pady=(10, 0))
-        ctk.CTkLabel(bub, text="💭  Thinking …",
-                     font=ctk.CTkFont(size=14),
-                     text_color=Colors.TEXT_SECONDARY
-                     ).pack(anchor="w", padx=14, pady=(4, 12))
+        lbl = ctk.CTkLabel(bub, text="💭  Thinking",
+                           font=ctk.CTkFont(size=14),
+                           text_color=Colors.TEXT_SECONDARY)
+        lbl.pack(anchor="w", padx=14, pady=(4, 12))
+
+        def _animate_dots(i: int = 0) -> None:
+            if not lbl.winfo_exists():
+                return
+            dots = "." * ((i % 3) + 1)
+            lbl.configure(text=f"💭  Thinking{dots}")
+            self.after(320, lambda: _animate_dots(i + 1))
+        _animate_dots()
         self.after(60, self._scroll_bottom)
         return ctr
 
@@ -1201,15 +1227,21 @@ class JapaneseTutorApp(ctk.CTk):
             return
         if self.tts.enabled:
             self.tts.enabled = False
-            self.tts_toggle_btn.configure(
+            self._animate_button_colors(
+                self.tts_toggle_btn,
                 text="🔇  Voice OFF",
-                fg_color=Colors.TTS_OFF, hover_color=Colors.TTS_OFF_HOVER)
+                fg_color=Colors.TTS_OFF,
+                hover_color=Colors.TTS_OFF_HOVER,
+            )
             self._status("🔇  Voice output disabled")
         else:
             self.tts.enabled = True
-            self.tts_toggle_btn.configure(
+            self._animate_button_colors(
+                self.tts_toggle_btn,
                 text="🔊  Voice ON",
-                fg_color=Colors.TTS_ON, hover_color=Colors.TTS_ON_HOVER)
+                fg_color=Colors.TTS_ON,
+                hover_color=Colors.TTS_ON_HOVER,
+            )
             self._status("🔊  Voice output enabled")
 
     def _on_voice_changed(self, name: str) -> None:
@@ -1224,18 +1256,22 @@ class JapaneseTutorApp(ctk.CTk):
         if not self.tts.enabled:
             return
         self._status("🔊  Sensei is speaking …")
-        self.tts_toggle_btn.configure(
+        self._animate_button_colors(
+            self.tts_toggle_btn,
             text="🔊  Speaking …",
             fg_color=Colors.TTS_SPEAKING,
-            hover_color=Colors.TTS_SPEAKING_HOVER)
+            hover_color=Colors.TTS_SPEAKING_HOVER,
+        )
 
         def _on_done() -> None:
             def _ui() -> None:
                 if self.tts.enabled:
-                    self.tts_toggle_btn.configure(
+                    self._animate_button_colors(
+                        self.tts_toggle_btn,
                         text="🔊  Voice ON",
                         fg_color=Colors.TTS_ON,
-                        hover_color=Colors.TTS_ON_HOVER)
+                        hover_color=Colors.TTS_ON_HOVER,
+                    )
                 if not self._is_processing and not self._is_recording:
                     self._status("✅  Ready")
             self.after(0, _ui)
@@ -1343,11 +1379,13 @@ class JapaneseTutorApp(ctk.CTk):
 
         self.tts.stop()
         self._is_recording = True
-        self.ptt_btn.configure(
+        self._animate_button_colors(
+            self.ptt_btn,
             text="🔴   Recording …",
             fg_color=Colors.PTT_REC,
             hover_color=Colors.PTT_REC_HOVER,
-            border_color=Colors.PTT_REC_BORDER)
+            border_color=Colors.PTT_REC_BORDER,
+        )
 
         lang_hint = self._lang_badge_text()
         self._status(f"🔴  Recording [{lang_hint}] — release to stop")
@@ -1377,11 +1415,13 @@ class JapaneseTutorApp(ctk.CTk):
             self.after_cancel(self._timer_id)
             self._timer_id = None
         self.vol_viz.deactivate()
-        self.ptt_btn.configure(
+        self._animate_button_colors(
+            self.ptt_btn,
             text="⏳   Processing …",
             fg_color=Colors.PTT_PROC,
             hover_color=Colors.PTT_PROC_HOVER,
-            border_color=Colors.PTT_PROC_BORDER)
+            border_color=Colors.PTT_PROC_BORDER,
+        )
         self._status("⏳  Processing audio …")
         threading.Thread(target=self._handle_voice, daemon=True).start()
 
@@ -1594,16 +1634,124 @@ class JapaneseTutorApp(ctk.CTk):
                       hover_color=Colors.CLEAR_BTN_HOVER,
                       corner_radius=6, command=_retry
                       ).pack(padx=12, pady=(0, 8))
-        self.after(60, self._scroll_bottom)
+        self._smooth_scroll_bottom()
 
     def _reset_ptt(self) -> None:
-        self.ptt_btn.configure(
+        self._animate_button_colors(
+            self.ptt_btn,
             text="🎤   Hold to Speak",
             fg_color=Colors.PTT_READY,
             hover_color=Colors.PTT_READY_HOVER,
-            border_color=Colors.PTT_READY_BORDER)
+            border_color=Colors.PTT_READY_BORDER,
+        )
 
     def _flash_save(self, text: str = "💾  Auto-saved") -> None:
         self.save_lbl.configure(text=text, text_color=Colors.ACCENT_GREEN)
         self.after(2500, lambda: self.save_lbl.configure(
             text="💾  Auto-save active", text_color="#445544"))
+
+    def _hex_to_rgb(self, hx: str) -> tuple[int, int, int]:
+        s = hx.strip()
+        if isinstance(s, tuple):
+            s = s[-1]
+        if s.startswith("#"):
+            s = s[1:]
+        if len(s) == 3:
+            s = "".join(ch * 2 for ch in s)
+        r = int(s[0:2], 16)
+        g = int(s[2:4], 16)
+        b = int(s[4:6], 16)
+        return r, g, b
+
+    def _rgb_to_hex(self, rgb: tuple[int, int, int]) -> str:
+        r, g, b = rgb
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _lerp_color(self, a: str, b: str, t: float) -> str:
+        ar, ag, ab = self._hex_to_rgb(a)
+        br, bg, bb = self._hex_to_rgb(b)
+        cr = int(ar + (br - ar) * t)
+        cg = int(ag + (bg - ag) * t)
+        cb = int(ab + (bb - ab) * t)
+        return self._rgb_to_hex((cr, cg, cb))
+
+    def _normalize_color(self, val) -> str:
+        if isinstance(val, tuple):
+            try:
+                return val[-1]
+            except Exception:
+                return str(val[0])
+        return str(val)
+
+    def _animate_button_colors(
+        self,
+        btn: ctk.CTkButton,
+        *,
+        text: Optional[str] = None,
+        fg_color: Optional[str] = None,
+        hover_color: Optional[str] = None,
+        border_color: Optional[str] = None,
+        duration_ms: int = 220,
+        steps: int = 10,
+    ) -> None:
+        try:
+            start_fg = self._normalize_color(btn.cget("fg_color"))
+            start_hover = self._normalize_color(btn.cget("hover_color"))
+            start_border = self._normalize_color(btn.cget("border_color"))
+        except Exception:
+            start_fg = start_hover = start_border = None
+
+        end_fg = fg_color or start_fg
+        end_hover = hover_color or start_hover
+        end_border = border_color or start_border
+
+        if text is not None:
+            btn.configure(text=text)
+
+        if not (start_fg and end_fg):
+            if fg_color or hover_color or border_color:
+                btn.configure(
+                    fg_color=fg_color or start_fg,
+                    hover_color=hover_color or start_hover,
+                    border_color=border_color or start_border,
+                )
+            return
+
+        def _step(i: int = 0) -> None:
+            t = min(1.0, i / steps)
+            try:
+                btn.configure(
+                    fg_color=self._lerp_color(start_fg, end_fg, t),
+                    hover_color=self._lerp_color(start_hover, end_hover, t) if start_hover and end_hover else end_hover,
+                    border_color=self._lerp_color(start_border, end_border, t) if start_border and end_border else end_border,
+                )
+            except Exception:
+                return
+            if i < steps:
+                self.after(max(1, duration_ms // steps), lambda: _step(i + 1))
+        _step()
+
+    def _smooth_scroll_bottom(self, duration_ms: int = 240, steps: int = 8) -> None:
+        try:
+            canvas = self.chat_scroll._parent_canvas
+            canvas.update_idletasks()
+            _, cur_end = canvas.yview()
+        except Exception:
+            self.after(60, self._scroll_bottom)
+            return
+        start = cur_end
+        end = 1.0
+        if start >= 0.995:
+            self.after(60, self._scroll_bottom)
+            return
+
+        def _s(i: int = 0) -> None:
+            t = min(1.0, i / steps)
+            val = start + (end - start) * t
+            try:
+                canvas.yview_moveto(val)
+            except Exception:
+                return
+            if i < steps:
+                self.after(max(1, duration_ms // steps), lambda: _s(i + 1))
+        _s()
