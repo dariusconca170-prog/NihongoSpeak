@@ -6,10 +6,7 @@ import sys
 import json
 from config import Colors
 import config
-try:
-    from .utils import safe_print
-except ImportError:
-    from utils import safe_print
+from utils import safe_print
 from flet_components import Sidebar, ModernCard, ActionButton, ChatBubble
 from audio_manager import AudioManager
 from ai_engine import WhisperTranscriber, GroqChat
@@ -48,6 +45,12 @@ class NihongoSenseiApp:
         self.mic_btn_icon = None
         self.send_btn_icon = None
         self.status_text = None
+        self.chat_messages = ft.ListView(
+            expand=True,
+            spacing=24,
+            padding=ft.padding.symmetric(vertical=20),
+            auto_scroll=True,
+        )
         
         self.setup_ui()
         self.init_backends()
@@ -98,14 +101,6 @@ class NihongoSenseiApp:
         self.page.update()
 
     def get_chat_view(self):
-        if not hasattr(self, "chat_messages") or self.chat_messages is None:
-            self.chat_messages = ft.ListView(
-                expand=True,
-                spacing=24,
-                padding=ft.padding.symmetric(vertical=20),
-                auto_scroll=True,
-            )
-        
         self.status_text = ft.Text("⏳ Initializing...", size=12, color=Colors.TEXT_SECONDARY)
         
         # Pill badge for ratio

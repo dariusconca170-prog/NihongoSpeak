@@ -42,8 +42,10 @@ def main() -> None:
     _check_deps()
     import flet as ft
     try:
-        from .flet_app import NihongoSenseiApp
+        # Use absolute imports because 'src' is now in sys.path
+        from flet_app import NihongoSenseiApp
     except ImportError:
+        # Fallback in case of pathing oddities
         from flet_app import NihongoSenseiApp
     
     def start_flet(page: ft.Page):

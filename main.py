@@ -1,17 +1,13 @@
-#!/usr/bin/env python3
-"""
-Entry point for 日本語 Sensei.
-Loads everything from /src and runs the app.
-"""
-
 import sys
 import os
 
-# Add src to Python path for easy imports
+# Add the 'src' directory to the search path
 src_path = os.path.join(os.path.dirname(__file__), "src")
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
+# Import the main function from src/main.py
+from src.main import main
+
 if __name__ == "__main__":
-    from main import main
     main()

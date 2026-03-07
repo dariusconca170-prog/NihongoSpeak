@@ -17,10 +17,7 @@ from faster_whisper import WhisperModel
 from groq import Groq
 import config
 from utils.japanese_utils import post_process_japanese
-try:
-    from .utils import safe_print
-except ImportError:
-    from utils import safe_print
+from utils import safe_print
 
 
 # ═══════════════════════════════════════════════════════════════
