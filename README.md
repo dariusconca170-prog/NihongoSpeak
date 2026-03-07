@@ -141,4 +141,4 @@ Edit `config.py` to change the local STT model:
 | `small`              | ~2 GB | Medium | Better   |
 | `medium`             | ~5 GB | Slower | Best     |
 
-The default is `base`. On CPU with `int8` quantisation it loads in under 10 seconds.
+The default is `medium`. On GPU with `int8` quantisation it loads in under seconds.
