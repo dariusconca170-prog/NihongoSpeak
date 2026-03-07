@@ -14,9 +14,24 @@ import os
 GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
-WHISPER_MODEL_SIZE: str = "base"
+WHISPER_MODEL_SIZE: str = "large-v3"
 WHISPER_DEVICE: str = "auto"
 WHISPER_COMPUTE_TYPE: str = "default"
+WHISPER_LANGUAGE: str = "ja"
+
+WHISPER_MODEL_OPTIONS: list[str] = [
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v3",
+]
+
+WHISPER_LANGUAGE_OPTIONS: list[dict[str, str]] = [
+    {"label": "Auto Detect", "value": "auto"},
+    {"label": "Japanese", "value": "ja"},
+    {"label": "English", "value": "en"},
+]
 
 # ── Audio Defaults ──────────────────────────────────────────────
 SAMPLE_RATE: int = 16000
@@ -83,21 +98,39 @@ TTS_RATES: dict[str, str] = {
 # ── UI Colour Palette ──────────────────────────────────────────
 
 class Colors:
-    # Primary Palette
-    BG_DARK           = "#1a1a1a" # Almost black, for deep backgrounds
-    BG_SECONDARY      = "#2c2c2c" # Dark grey, for secondary panels
-    HEADER_BG         = "#232323" # Slightly lighter for the header
-    CHAT_BORDER       = "#4a4a4a" # Muted border color
-
-    # Bubble Colors
-    USER_BUBBLE       = "#3a3a3a" # Darker bubble for the user
-    USER_BORDER       = "#5a5a5a" # Subtle border for user bubble
-    ASSISTANT_BUBBLE  = "#4a4a4a" # Lighter bubble for the assistant
-    ASSISTANT_BORDER  = "#6a6a6a" # Subtle border for assistant bubble
-
-    # Push-to-Talk & Buttons
-    PTT_READY         = "#4CAF50" # Green for ready
-    PTT_READY_HOVER   = "#66BB6A" # Lighter green on hover
+    # high-end 2026 SaaS aesthetic (Linear/ChatGPT/Notion style)
+    BG_SIDEBAR     = "#0D0D0E" # Dark sidebar
+    BG_MAIN        = "#161618" # Slightly lighter main workspace
+    BG_INPUT       = "#1E1E20" # TextField background
+    
+    BORDER_DEFAULT = "white10" # Crisp, modern dividers
+    BORDER_FOCUS   = "white24"
+    
+    ACCENT_PRIMARY = "#6366F1" # Vibrant Indigo (Linear style)
+    ACCENT_SECONDARY= "#4F46E5" # Deeper Indigo
+    
+    TEXT_PRIMARY   = "#F8F9FA" # Near white
+    TEXT_SECONDARY = "#94A3B8" # Muted slate
+    TEXT_INVERSE   = "#FFFFFF"
+    
+    # Message Bubbles
+    USER_BUBBLE    = "#2D2D2E" # Subtle dark gray
+    AI_BUBBLE      = "#1E1E2E" # Very slight purple/blue tint
+    
+    # Functional Colors
+    SUCCESS        = "#10B981" # Emerald
+    ERROR          = "#EF4444" # Rose
+    WARNING        = "#F59E0B" # Amber
+    
+    # Legacy compatibility (keeping mapping for now)
+    BG_DARK        = BG_MAIN
+    BG_PRIMARY     = BG_MAIN
+    BG_SECONDARY   = BG_SIDEBAR
+    BG_TERTIARY    = BG_INPUT
+    BORDER_SUBTLE  = BORDER_DEFAULT
+    ACCENT_GREEN   = SUCCESS
+    ACCENT_RED     = ERROR
+    ACCENT_GOLD    = WARNING
     PTT_READY_BORDER  = "#81C784" # Even lighter for the border
     PTT_REC           = "#f44336" # Red for recording
     PTT_REC_HOVER     = "#ef5350" # Lighter red on hover

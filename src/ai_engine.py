@@ -18,6 +18,10 @@ from faster_whisper import WhisperModel
 from groq import Groq
 
 import config
+try:
+    from .utils import safe_print
+except ImportError:
+    from utils import safe_print
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -63,6 +67,13 @@ _JP_CHAR_PATTERN = re.compile(
     r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]"
 )
 
+# Strict filter to remove ALL non-Japanese characters (English letters, etc.)
+# except for Japanese punctuation and numbers (which we process later).
+_STRICT_JP_CLEANER = re.compile(
+    r"[^a-zA-Z\d\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\u3000-\u303F！？、。：；「」\s]"
+)
+_STRIP_ALPHABET = re.compile(r"[a-zA-Z]")
+
 
 def _replace_digits_with_japanese(text: str) -> str:
     if not re.search(r"\d", text):
@@ -88,7 +99,14 @@ def _replace_digits_with_japanese(text: str) -> str:
 
 
 def _post_process_japanese(text: str) -> str:
+    # 1. Clean up weird characters and force remove all alphabet (English) characters
+    text = _STRIP_ALPHABET.sub("", text)
+    text = _STRICT_JP_CLEANER.sub("", text)
+    
+    # 2. Process numbers
     text = _replace_digits_with_japanese(text)
+    
+    # 3. Clean punctuation and spaces
     text = re.sub(r"([。、！？])\1+", r"\1", text)
     text = re.sub(
         r"([\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF])"
@@ -132,11 +150,23 @@ class WhisperTranscriber:
         model_size: str = config.WHISPER_MODEL_SIZE,
         device: str = config.WHISPER_DEVICE,
         compute_type: str = config.WHISPER_COMPUTE_TYPE,
+        language: str = config.WHISPER_LANGUAGE,
     ) -> None:
         self._model_size = model_size
         self._device = device
         self._compute_type = compute_type
+        self._language = language
         self._model: Optional[WhisperModel] = None
+
+    def set_model_size(self, size: str) -> None:
+        """Update the model size and clear the loaded model so it reloads."""
+        if self._model_size != size:
+            self._model_size = size
+            self._model = None
+
+    def set_language(self, language: str) -> None:
+        """Update the transcription language (auto, ja, en)."""
+        self._language = language
 
     def load(self) -> None:
         """Load the Whisper model with device detection and a warm-up test."""
@@ -146,7 +176,7 @@ class WhisperTranscriber:
         if use_cuda:
             try:
                 # 1. Try CUDA with int8_float16 (often more robust than float16)
-                print(f"--- Attempting Whisper load (CUDA, int8_float16) ---")
+                safe_print(f"--- Attempting Whisper load (CUDA, int8_float16) ---")
                 self._model = WhisperModel(
                     self._model_size,
                     device="cuda",
@@ -161,16 +191,25 @@ class WhisperTranscriber:
                 
                 self._device = "cuda"
                 self._compute_type = "int8_float16"
-                print("--- Whisper loaded and verified on CUDA ---")
+                safe_print("--- Whisper loaded and verified on CUDA ---")
                 return
             except Exception as exc:
-                print(f"--- CUDA load or warm-up failed: {exc} ---")
+                err_msg = str(exc)
+                safe_print(f"--- CUDA load or warm-up failed: {err_msg} ---")
+                
+                # Check for common missing DLL error on Windows
+                if "cublas64_12.dll" in err_msg:
+                    safe_print("--- [TIP] Missing CUDA 12 libraries. To fix, download 'cuBLAS for CUDA 12' ---")
+                    safe_print("--- or install the NVIDIA CUDA Toolkit 12.x from NVIDIA's website. ---")
+                elif "cudnn" in err_msg.lower():
+                    safe_print("--- [TIP] Missing cuDNN libraries. Please install cuDNN for CUDA 12. ---")
+                
                 self._model = None # Clean up failed init
         
         # CPU Fallback
         try:
             target_compute = "int8" if self._compute_type in ("auto", "default") else self._compute_type
-            print(f"--- Loading Whisper on CPU ({self._model_size}, {target_compute}) ---")
+            safe_print(f"--- Loading Whisper on CPU ({self._model_size}, {target_compute}) ---")
             self._model = WhisperModel(
                 self._model_size,
                 device="cpu",
@@ -178,12 +217,12 @@ class WhisperTranscriber:
             )
             self._device = "cpu"
             self._compute_type = target_compute
-            print("--- Whisper loaded on CPU ---")
+            safe_print("--- Whisper loaded on CPU ---")
         except Exception as exc:
-            print(f"--- CPU load failed: {exc} ---")
+            safe_print(f"--- CPU load failed: {exc} ---")
             # Last resort: tiny model
             if self._model_size != "tiny":
-                print("--- Attempting tiny model fallback on CPU ---")
+                safe_print("--- Attempting tiny model fallback on CPU ---")
                 self._model = WhisperModel("tiny", device="cpu", compute_type="int8")
                 self._model_size = "tiny"
                 self._device = "cpu"
@@ -199,18 +238,24 @@ class WhisperTranscriber:
         self,
         audio_path: str,
         language: Optional[str] = None,
-    ) -> str:
-        """Transcribe a WAV file with an automatic runtime fallback to CPU if CUDA fails."""
+    ) -> tuple[str, str]:
+        """Transcribe a WAV file with an automatic runtime fallback to CPU if CUDA fails.
+        Returns (text, detected_language)."""
         if self._model is None:
             raise RuntimeError("Model not loaded — call load() first.")
 
+        # Use explicitly passed language or the instance default
+        target_lang = language or self._language
+        if target_lang == "auto":
+            target_lang = None
+
         try:
-            return self._perform_transcribe(audio_path, language)
+            return self._perform_transcribe(audio_path, target_lang)
         except Exception as exc:
             # If CUDA fails at runtime, immediately try to reload on CPU and retry once
             if self._device == "cuda":
-                print(f"--- Runtime CUDA transcription failed: {exc} ---")
-                print("--- Emergency fallback to CPU and retrying... ---")
+                safe_print(f"--- Runtime CUDA transcription failed: {exc} ---")
+                safe_print("--- Emergency fallback to CPU and retrying... ---")
                 try:
                     self._model = WhisperModel(
                         self._model_size,
@@ -221,13 +266,13 @@ class WhisperTranscriber:
                     self._compute_type = "int8"
                     return self._perform_transcribe(audio_path, language)
                 except Exception as cpu_exc:
-                    print(f"--- Emergency CPU fallback failed: {cpu_exc} ---")
+                    safe_print(f"--- Emergency CPU fallback failed: {cpu_exc} ---")
                     raise cpu_exc
             else:
                 # If it failed on CPU already, just re-raise
                 raise exc
 
-    def _perform_transcribe(self, audio_path: str, language: Optional[str] = None) -> str:
+    def _perform_transcribe(self, audio_path: str, language: Optional[str] = None) -> tuple[str, str]:
         """Internal transcription logic."""
         if language == "ja":
             initial_prompt = _WHISPER_PROMPT_JA
@@ -236,7 +281,7 @@ class WhisperTranscriber:
         else:
             initial_prompt = None
 
-        segments, _info = self._model.transcribe(
+        segments, info = self._model.transcribe(
             audio_path,
             beam_size=5,
             language=language,
@@ -246,13 +291,14 @@ class WhisperTranscriber:
         )
 
         raw_text = " ".join(seg.text for seg in segments).strip()
+        detected_lang = info.language
 
         if language == "ja" or (
             language is None and _JP_CHAR_PATTERN.search(raw_text)
         ):
             raw_text = _post_process_japanese(raw_text)
 
-        return raw_text
+        return raw_text, detected_lang
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -327,6 +373,10 @@ class GroqChat:
     # ── Chat ────────────────────────────────────────────────────
 
     def send(self, user_text: str) -> str:
+        """Send *user_text* and return the assistant reply."""
+        return self.get_response(user_text)
+
+    def get_response(self, user_text: str) -> str:
         """Send *user_text* and return the assistant reply.
 
         The message list sent to Groq is structured as:

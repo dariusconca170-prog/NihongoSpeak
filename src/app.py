@@ -1445,7 +1445,7 @@ class JapaneseTutorApp(ctk.CTk):
             self.after(0, lambda: self._status("🔄  Transcribing speech …"))
             
             try:
-                text = self.whisper.transcribe(wav, language=lang)
+                text, _detected_lang = self.whisper.transcribe(wav, language=lang)
             except Exception as exc:
                 self.after(0, lambda e=exc: self._status(
                     f"❌  Transcription failed: {str(e)[:80]}"))

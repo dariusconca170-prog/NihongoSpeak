@@ -13,7 +13,7 @@ import sys
 
 def _check_deps() -> None:
     needed: dict[str, str] = {
-        "customtkinter":  "customtkinter>=5.2.0",
+        "flet":           "flet>=0.21.0",
         "groq":           "groq>=0.11.0",
         "faster_whisper":  "faster-whisper>=1.0.0",
         "sounddevice":    "sounddevice>=0.5.0",
@@ -28,21 +28,25 @@ def _check_deps() -> None:
         except ImportError:
             missing.append(pip_name)
     if missing:
-        print("╔══════════════════════════════════════════════════╗")
-        print("║  Missing Python packages — please install:       ║")
-        print("╚══════════════════════════════════════════════════╝")
-        print(f"  pip install {' '.join(missing)}\n")
+        safe_print("╔══════════════════════════════════════════════════╗")
+        safe_print("║  Missing Python packages — please install:       ║")
+        safe_print("╚══════════════════════════════════════════════════╝")
+        safe_print(f"  pip install {' '.join(missing)}\n")
         sys.exit(1)
 
 
 def main() -> None:
     _check_deps()
+    import flet as ft
     try:
-        from .app import JapaneseTutorApp
+        from .flet_app import NihongoSenseiApp
     except ImportError:
-        from app import JapaneseTutorApp
-    app = JapaneseTutorApp()
-    app.mainloop()
+        from flet_app import NihongoSenseiApp
+    
+    def start_flet(page: ft.Page):
+        NihongoSenseiApp(page)
+        
+    ft.app(target=start_flet)
 
 
 if __name__ == "__main__":
