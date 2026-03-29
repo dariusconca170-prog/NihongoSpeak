@@ -1,10 +1,9 @@
-flet>=0.21.0
-groq>=0.11.0
-faster-whisper>=1.0.0
-sounddevice>=0.5.0
-numpy>=1.26.0
-edge-tts>=6.1.0
+flet-desktop==0.8.0
+requests>=2.31.0
+customtkinter>=5.2.2
 pygame>=2.5.0
+faster-whisper>=1.0.0
+groq>=0.11.0
 
 # CUDA Support (Windows/Linux)
 # If you have an NVIDIA GPU, run:
