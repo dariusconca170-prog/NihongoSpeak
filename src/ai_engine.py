@@ -16,6 +16,7 @@ class WhisperTranscriber:
         self._model_size = config.WHISPER_MODEL_SIZE
         self._device = config.WHISPER_DEVICE
         self._compute_type = config.WHISPER_COMPUTE_TYPE
+        self._language = config.WHISPER_LANGUAGE  # Add this line
         self._model: Optional[WhisperModel] = None
 
     def load(self) -> None:
@@ -30,7 +31,7 @@ class WhisperTranscriber:
         import io
         buffer = io.BytesIO(audio_data)
         segments, _ = self._model.transcribe(
-            buffer, language="ja", initial_prompt=config.WHISPER_PROMPT_JA
+            buffer, language=self._language, initial_prompt=config.WHISPER_PROMPT_JA # Use self._language
         )
         text = "".join(s.text for s in segments).strip()
         return post_process_japanese(text)

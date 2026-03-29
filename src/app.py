@@ -424,7 +424,14 @@ class JapaneseTutorApp(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
-        self.after(250, self._init_backends)
+        try:
+            self.after(250, self._init_backends)
+        except Exception as e:
+            self._status(f"FATAL: Failed to initialize backends: {e}")
+            import traceback
+            traceback.print_exc()
+            # Optionally, exit the application gracefully here if initialization fails critically
+            # self.destroy()
 
     # ────────────────────────────────────────────────────────────
     #  SHUTDOWN

@@ -53,7 +53,14 @@ class NihongoSenseiApp:
         )
         
         self.setup_ui()
-        self.init_backends()
+        try:
+            self.init_backends()
+        except Exception as e:
+            self.safe_log(f"FATAL: Failed to initialize backends: {e}")
+            import traceback
+            traceback.print_exc()
+            # Optionally, exit the application gracefully here if initialization fails critically
+            # self.page.window_close()
 
     def safe_log(self, message: str):
         """Helper to print messages safely on Windows consoles."""

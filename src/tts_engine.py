@@ -67,7 +67,7 @@ class TTSEngine:
             # Step 3: Synthesize audio
             s_res = requests.post(f"{self.base_url}/synthesis",
                                   params={"speaker": style["id"]},
-                                  data=json.dumps(query))
+                                  data=json.dumps(query), timeout=5) # Add timeout
             if s_res.status_code != 200:
                 print(f"VOICEVOX /synthesis error: {s_res.status_code} - {s_res.text}")
                 self.available = False
@@ -75,6 +75,10 @@ class TTSEngine:
                 return
 
             await self._play(s_res.content, on_done)
+        except requests.exceptions.Timeout: # Catch timeout specifically
+            print("VOICEVOX NOT FOUND - CHECK PORT 50021")
+            self.available = False
+            if on_done: on_done()
         except requests.exceptions.RequestException as e:
             print(f"VOICEVOX Connection Error: {e}")
             self.available = False
