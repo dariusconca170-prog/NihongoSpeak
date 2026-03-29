@@ -1002,7 +1002,7 @@ class JapaneseTutorApp(ctk.CTk):
             bar,
             text=f"Whisper {config.WHISPER_MODEL_SIZE}  •  "
                  f"LLM {config.GROQ_MODEL}  •  "
-                 f"TTS edge-tts  •  70/30 ratio",
+                 f"TTS VOICEVOX  •  70/30 ratio",
             font=ctk.CTkFont(size=10), text_color="#444466"
         ).pack(side="right", padx=16, pady=2)
 
