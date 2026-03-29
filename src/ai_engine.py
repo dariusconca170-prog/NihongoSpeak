@@ -44,12 +44,13 @@ class GroqChat:
     def send(self, user_text: str) -> tuple[str, str]:
         """Returns (Clean_Reply, Detected_Emotion)"""
         # Rule to force AI to pick an emotion for VOICEVOX
+        # Prioritize NORMAL, EXCITED, CHILL, SURPRISED
         emotion_rule = (
-            "\n\n[EMOTION RULE]: Always start your response with a tag: "
-            "[NORMAL], [EXCITED], [CHILL], or [SURPRISED]. "
+            "\n\n[EMOTION RULE]: Always start your response with one of the following "
+            "emotion tags, in this order of priority: [NORMAL], [EXCITED], [CHILL], [SURPRISED]. "
             "Example: '[EXCITED] すごい！'"
         )
-        
+
         system_content = config.BASE_SYSTEM_PROMPT + emotion_rule
 
         messages = [
@@ -68,10 +69,11 @@ class GroqChat:
             self._history.append({"role": "assistant", "content": raw_reply})
 
             # Extract emotion and clean text
-            match = re.search(r"\[(EXCITED|CHILL|SURPRISED|NORMAL)\]", raw_reply)
+            # Prioritize NORMAL, EXCITED, CHILL, SURPRISED based on the rule
+            match = re.search(r"\[(NORMAL|EXCITED|CHILL|SURPRISED)\]", raw_reply)
             emotion = match.group(1) if match else "NORMAL"
-            clean_text = re.sub(r"\[.*?\]", "", raw_reply).strip()
-            
+            clean_text = re.sub(r"\[(NORMAL|EXCITED|CHILL|SURPRISED)\]", "", raw_reply).strip()
+
             return clean_text, emotion
         except Exception as e:
             safe_print(f"AI Error: {e}")
