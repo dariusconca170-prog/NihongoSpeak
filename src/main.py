@@ -21,7 +21,6 @@ def _check_deps() -> None:
         "faster_whisper":  "faster-whisper>=1.0.0",
         "sounddevice":    "sounddevice>=0.5.0",
         "numpy":          "numpy>=1.26.0",
-        "edge_tts":       "edge-tts>=6.1.0",
         "pygame":         "pygame>=2.5.0",
     }
     missing: list[str] = []
