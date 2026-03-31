@@ -1,6 +1,4 @@
-"""
-ai_engine.py — Updated for Emotion Tagging
-"""
+""" ai_engine.py — Updated for Emotion Tagging """
 from __future__ import annotations
 import re
 import threading
@@ -11,6 +9,7 @@ import config
 from utils.japanese_utils import post_process_japanese
 from utils import safe_print
 
+
 class WhisperTranscriber:
     def __init__(self):
         self._model_size = config.WHISPER_MODEL_SIZE
@@ -19,10 +18,17 @@ class WhisperTranscriber:
         self._language = config.WHISPER_LANGUAGE  # Add this line
         self._model: Optional[WhisperModel] = None
 
+    @property
+    def ready(self) -> bool:
+        """Returns True if the model is loaded and ready for transcription."""
+        return self._model is not None
+
     def load(self) -> None:
         if self._model is None:
             self._model = WhisperModel(
-                self._model_size, device=self._device, compute_type=self._compute_type
+                self._model_size,
+                device=self._device,
+                compute_type=self._compute_type,
             )
 
     def transcribe(self, audio_data: bytes) -> str:
@@ -31,10 +37,13 @@ class WhisperTranscriber:
         import io
         buffer = io.BytesIO(audio_data)
         segments, _ = self._model.transcribe(
-            buffer, language=self._language, initial_prompt=config.WHISPER_PROMPT_JA # Use self._language
+            buffer,
+            language=self._language,
+            initial_prompt=config.WHISPER_PROMPT_JA  # Use self._language
         )
         text = "".join(s.text for s in segments).strip()
         return post_process_japanese(text)
+
 
 class GroqChat:
     def __init__(self, api_key: str):
@@ -51,15 +60,12 @@ class GroqChat:
             "emotion tags, in this order of priority: [NORMAL], [EXCITED], [CHILL], [SURPRISED]. "
             "Example: '[EXCITED] すごい！'"
         )
-
         system_content = config.BASE_SYSTEM_PROMPT + emotion_rule
-
         messages = [
             {"role": "system", "content": system_content},
             *self._history[-20:],
             {"role": "user", "content": user_text}
         ]
-
         try:
             resp = self._client.chat.completions.create(
                 model=self._model,
@@ -68,13 +74,11 @@ class GroqChat:
             )
             raw_reply = resp.choices[0].message.content or ""
             self._history.append({"role": "assistant", "content": raw_reply})
-
             # Extract emotion and clean text
             # Prioritize NORMAL, EXCITED, CHILL, SURPRISED based on the rule
             match = re.search(r"\[(NORMAL|EXCITED|CHILL|SURPRISED)\]", raw_reply)
             emotion = match.group(1) if match else "NORMAL"
             clean_text = re.sub(r"\[(NORMAL|EXCITED|CHILL|SURPRISED)\]", "", raw_reply).strip()
-
             return clean_text, emotion
         except Exception as e:
             safe_print(f"AI Error: {e}")
