@@ -71,6 +71,7 @@ class NihongoSenseiApp:
     def setup_ui(self):
         # Sidebar
         self.sidebar = Sidebar(on_change=self.handle_nav_change)
+        self.sidebar.bgcolor = ft.Colors.BLUE
 
         # Content Area (Main Layout)
         self.content_container = ft.Container(
