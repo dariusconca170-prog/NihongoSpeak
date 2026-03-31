@@ -82,10 +82,7 @@ class NihongoSenseiApp:
 
         # Main Layout with Sidebar + Content
         main_layout = ft.Row(
-            [
-                self.sidebar,
-                self.content_container
-            ],
+            [self.sidebar, self.content_container],
             expand=True,
             spacing=0,
         )
@@ -93,7 +90,6 @@ class NihongoSenseiApp:
 
     def handle_nav_change(self, view_id):
         self.current_view = view_id
-
         # Update sidebar visual state
         self.sidebar.set_selected(view_id)
 
@@ -372,14 +368,12 @@ class NihongoSenseiApp:
                                 size=10,
                                 color=Colors.TEXT_SECONDARY if self.whisper._device == "cuda" else Colors.ERROR,
                                 italic=True
-                            )
-                            if self.whisper.ready else ft.Container(),
+                            ) if self.whisper.ready else ft.Container(),
                             ActionButton(
                                 "Install CUDA Libraries",
                                 on_click=self.handle_fix_cuda,
                                 primary=False
-                            )
-                            if self.whisper._device != "cuda" else ft.Container()
+                            ) if self.whisper._device != "cuda" else ft.Container()
                         ], spacing=2),
                         padding=ft.padding.only(top=10)
                     )
@@ -444,7 +438,7 @@ class NihongoSenseiApp:
             if os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    return data.get(key, default)
+                return data.get(key, default)
         except Exception as e:
             self.safe_log(f"[CONFIG] Error loading config: {e}")
         return default
@@ -604,7 +598,7 @@ class NihongoSenseiApp:
 
         self.safe_log(f"[AUDIO] Transcribing file: {audio_data}")
         try:
-            text, lang = self.whisper.transcribe(audio_path=audio_data)
+            text, lang = self.whisper.transcribe(audio_data=audio_data)
             if text:
                 self.safe_log(f"[AUDIO] Transcribed: \"{text}\" ({lang})")
                 self.page.run_thread(lambda: self.handle_send_text(text))
@@ -664,7 +658,6 @@ class NihongoSenseiApp:
             try:
                 from session_memory import build_previous_session_summary
                 self.chat = GroqChat(api_key=api_key)
-
                 # Inject context
                 try:
                     summary = build_previous_session_summary()
@@ -675,7 +668,6 @@ class NihongoSenseiApp:
                     )
                 except Exception as e:
                     self.safe_log(f"[INIT] Context injection warning: {e}")
-
                 self.safe_log("[INIT] GroqChat initialized.")
                 self.status_text.value = "✅ Connected"
             except Exception as exc:
@@ -684,23 +676,23 @@ class NihongoSenseiApp:
 
         self.tts.initialize()
 
-        def load_whisper():
-            self.safe_log("[INIT] Loading Whisper model...")
-            try:
-                self.whisper.load()
-                self.safe_log(f"[INIT] Whisper model loaded ({self.whisper._model_size}).")
-                # Enable mic
-                if self.mic_btn_icon:
-                    self.mic_btn_icon.disabled = False
-                    self.mic_btn_icon.icon_color = Colors.ACCENT_PRIMARY
-                    self.mic_btn_icon.tooltip = "Voice Input (Push to Talk)"
-                self.page.run_thread(lambda: setattr(self.status_text, 'value', f"✅ Ready ({self.whisper._model_size})"))
-                self.add_message("assistant", "ようこそ！ I'm ready to practice Japanese with you.")
-            except Exception as exc:
-                err_msg = str(exc)
-                self.safe_log(f"[INIT] ERROR loading Whisper: {err_msg}")
-                self.page.run_thread(lambda: setattr(self.status_text, 'value', f"❌ Whisper Error"))
-                self.page.update()
+    def load_whisper(self):
+        self.safe_log("[INIT] Loading Whisper model...")
+        try:
+            self.whisper.load()
+            self.safe_log(f"[INIT] Whisper model loaded ({self.whisper._model_size}).")
+            # Enable mic
+            if self.mic_btn_icon:
+                self.mic_btn_icon.disabled = False
+                self.mic_btn_icon.icon_color = Colors.ACCENT_PRIMARY
+                self.mic_btn_icon.tooltip = "Voice Input (Push to Talk)"
+            self.page.run_thread(lambda: setattr(self.status_text, 'value', f"✅ Ready ({self.whisper._model_size})"))
+            self.add_message("assistant", "やっほー！🌸 日本語の練習しようね！")
+        except Exception as exc:
+            err_msg = str(exc)
+            self.safe_log(f"[INIT] ERROR loading Whisper: {err_msg}")
+            self.page.run_thread(lambda: setattr(self.status_text, 'value', f"❌ Whisper Error"))
+            self.page.update()
 
         threading.Thread(target=load_whisper, daemon=True).start()
 
