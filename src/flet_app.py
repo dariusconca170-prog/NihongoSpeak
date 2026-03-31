@@ -13,6 +13,7 @@ from ai_engine import WhisperTranscriber, GroqChat
 from tts_engine import TTSEngine
 from vocab_tracker import VocabTracker
 
+
 class NihongoSenseiApp:
     def __init__(self, page: ft.Page):
         self.page = page
@@ -26,20 +27,20 @@ class NihongoSenseiApp:
             "Inter": "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bslnt%2Cwght%5D.ttf"
         }
         self.page.theme = ft.Theme(font_family="Inter")
-        self.page.scroll = None # Ensure the page itself doesn't scroll
-        
+        self.page.scroll = None  # Ensure the page itself doesn't scroll
+
         # Backends
         self.audio = AudioManager()
         self.whisper = WhisperTranscriber()
         self.chat = None
         self.tts = TTSEngine()
         self.vocab = VocabTracker()
-        
+
         # State
         self.current_view = "chat"
         self.is_recording = False
         self.is_processing = False
-        
+
         # UI References
         self.chat_input = None
         self.mic_btn_icon = None
@@ -51,8 +52,9 @@ class NihongoSenseiApp:
             padding=ft.padding.symmetric(vertical=20),
             auto_scroll=True,
         )
-        
+
         self.setup_ui()
+
         try:
             self.init_backends()
         except Exception as e:
@@ -69,7 +71,7 @@ class NihongoSenseiApp:
     def setup_ui(self):
         # Sidebar
         self.sidebar = Sidebar(on_change=self.handle_nav_change)
-        
+
         # Content Area (Main Layout)
         self.content_container = ft.Container(
             expand=True,
@@ -77,7 +79,7 @@ class NihongoSenseiApp:
             bgcolor=Colors.BG_MAIN,
         )
         self.content_container.content = self.get_chat_view()
-        
+
         # Main Layout with Sidebar + Content
         main_layout = ft.Row(
             [
@@ -87,11 +89,11 @@ class NihongoSenseiApp:
             expand=True,
             spacing=0,
         )
-        
         self.page.add(main_layout)
 
     def handle_nav_change(self, view_id):
         self.current_view = view_id
+
         # Update sidebar visual state
         self.sidebar.set_selected(view_id)
 
@@ -105,11 +107,12 @@ class NihongoSenseiApp:
             self.content_container.content = self.get_dashboard_view()
         elif view_id == "settings":
             self.content_container.content = self.get_settings_view()
+
         self.page.update()
 
     def get_chat_view(self):
         self.status_text = ft.Text("⏳ Initializing...", size=12, color=Colors.TEXT_SECONDARY)
-        
+
         # Pill badge for ratio
         ratio_badge = ft.Container(
             content=ft.Text("70% JP / 30% EN", size=11, color=Colors.ACCENT_PRIMARY, weight="bold"),
@@ -122,10 +125,10 @@ class NihongoSenseiApp:
         # Mic button
         self.mic_btn_icon = ft.IconButton(
             icon=ft.Icons.MIC_ROUNDED,
-            icon_color=Colors.TEXT_SECONDARY, # Start muted/gray
+            icon_color=Colors.TEXT_SECONDARY,  # Start muted/gray
             tooltip="Initializing AI model...",
             bgcolor="white05",
-            disabled=True, # Start disabled
+            disabled=True,  # Start disabled
         )
         self.mic_btn_icon.on_click = self.handle_mic_click
 
@@ -202,7 +205,7 @@ class NihongoSenseiApp:
         # Calculate stats from vocab tracker
         all_words = self.vocab.all_words()
         due = self.vocab.due_today()
-        
+
         return ft.Column([
             ft.Text("Progress Dashboard", size=24, weight="bold", color=Colors.TEXT_PRIMARY),
             ft.Container(height=20),
@@ -219,6 +222,83 @@ class NihongoSenseiApp:
                 )
             )
         ])
+
+    def get_vocab_view(self):
+        # Get vocabulary data
+        all_words = self.vocab.all_words()
+        due_today = self.vocab.due_today()
+
+        # Build the word list
+        word_controls = []
+        if not all_words:
+            word_controls.append(
+                ft.Text(
+                    "No vocabulary tracked yet.\n"
+                    "Words you struggle with will appear here.",
+                    size=13,
+                    color=Colors.TEXT_SECONDARY
+                )
+            )
+        else:
+            # Header row
+            word_controls.append(
+                ft.Container(
+                    content=ft.Row([
+                        ft.Text("Word", size=12, weight="bold", color=Colors.TEXT_SECONDARY, width=150),
+                        ft.Text("Reading", size=12, weight="bold", color=Colors.TEXT_SECONDARY, width=150),
+                        ft.Text("Struggles", size=12, weight="bold", color=Colors.TEXT_SECONDARY, width=80),
+                        ft.Text("Next Review", size=12, weight="bold", color=Colors.TEXT_SECONDARY, width=120),
+                    ]),
+                    padding=10
+                )
+            )
+
+            # Word rows
+            for item in all_words:
+                word = item.get("word", "")
+                reading = item.get("reading", "")
+                struggles = str(item.get("struggles", 0))
+                next_review = item.get("next_review", "")
+                is_due = word in {d.get("word", "") for d in due_today}
+
+                word_controls.append(
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Text(word, size=14, color=Colors.ACCENT_GOLD if is_due else Colors.TEXT_PRIMARY, width=150),
+                            ft.Text(reading, size=13, color=Colors.TEXT_SECONDARY, width=150),
+                            ft.Text(struggles, size=13, color=Colors.TEXT_SECONDARY, width=80),
+                            ft.Text(next_review, size=13, color=Colors.TEXT_SECONDARY, width=120),
+                        ]),
+                        padding=10,
+                        border=ft.border.only(bottom=1, color=Colors.BORDER_DEFAULT) if is_due else None
+                    )
+                )
+
+        return ft.Column([
+            ft.Text("Vocabulary Tracker", size=24, weight="bold", color=Colors.TEXT_PRIMARY),
+            ft.Container(height=10),
+            ft.Row([
+                ModernCard(
+                    title="Total Words",
+                    content=ft.Text(str(len(all_words)), size=32, weight="bold")
+                ),
+                ModernCard(
+                    title="Due Today",
+                    content=ft.Text(str(len(due_today)), size=32, weight="bold", color=Colors.ACCENT_GOLD if due_today else Colors.TEXT_PRIMARY)
+                ),
+            ], spacing=20),
+            ft.Container(height=20),
+            ft.Text("Tracked Vocabulary", size=16, weight="bold", color=Colors.TEXT_PRIMARY),
+            ft.Container(
+                content=ft.ListView(
+                    controls=word_controls,
+                    height=400,
+                ),
+                border_radius=10,
+                border=ft.border.all(1, Colors.BORDER_DEFAULT),
+                bgcolor=Colors.BG_SECONDARY,
+            ),
+        ], spacing=10)
 
     def get_settings_view(self):
         self.api_key_input = ft.TextField(
@@ -292,19 +372,20 @@ class NihongoSenseiApp:
                                 size=10,
                                 color=Colors.TEXT_SECONDARY if self.whisper._device == "cuda" else Colors.ERROR,
                                 italic=True
-                            ) if self.whisper.ready else ft.Container(),
+                            )
+                            if self.whisper.ready else ft.Container(),
                             ActionButton(
-                                "Install CUDA Libraries", 
+                                "Install CUDA Libraries",
                                 on_click=self.handle_fix_cuda,
                                 primary=False
-                            ) if self.whisper._device != "cuda" else ft.Container()
+                            )
+                            if self.whisper._device != "cuda" else ft.Container()
                         ], spacing=2),
                         padding=ft.padding.only(top=10)
                     )
                 ])
             ], spacing=20),
-            ft.Text("Pro tip: Larger models are more accurate but slower. 'CUDA' means your GPU is being used.", 
-                    size=11, italic=True, color=Colors.TEXT_SECONDARY),
+            ft.Text("Pro tip: Larger models are more accurate but slower. 'CUDA' means your GPU is being used.", size=11, italic=True, color=Colors.TEXT_SECONDARY),
         ], spacing=15)
 
         return ft.Column([
@@ -319,27 +400,23 @@ class NihongoSenseiApp:
     def handle_model_change(self, e):
         new_size = self.model_size_dropdown.value
         self.safe_log(f"[SETTINGS] Changing Whisper model to: {new_size}")
-        
         # Save to config file
         self.save_config_value("whisper_model_size", new_size)
-        
         # Force a reload in the background
         self.status_text.value = f"⏳ Switching to {new_size}..."
         self.page.update()
-        
+
         def do_reload():
             self.whisper.set_model_size(new_size)
             self.load_whisper_background()
-            
+
         threading.Thread(target=do_reload, daemon=True).start()
 
     def handle_transcription_lang_change(self, e):
         new_lang = self.transcription_lang_dropdown.value
         self.safe_log(f"[SETTINGS] Changing transcription language to: {new_lang}")
-        
         # Save to config file
         self.save_config_value("whisper_language", new_lang)
-        
         self.whisper.set_language(new_lang)
         self.status_text.value = f"✅ Transcription set to: {new_lang}"
         self.page.update()
@@ -349,12 +426,10 @@ class NihongoSenseiApp:
         try:
             config_path = os.path.join(config.HISTORY_DIR, ".app_config")
             os.makedirs(os.path.dirname(config_path), exist_ok=True)
-            
             data = {}
             if os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-            
             data[key] = value
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f)
@@ -381,20 +456,17 @@ class NihongoSenseiApp:
             self.mic_btn_icon.disabled = True
             self.mic_btn_icon.icon_color = Colors.TEXT_SECONDARY
             self.mic_btn_icon.tooltip = f"Loading {self.whisper._model_size}..."
-            self.page.update()
+        self.page.update()
 
         try:
             self.whisper.load()
             self.safe_log(f"[INIT] Whisper ({self.whisper._model_size}) loaded on {self.whisper._device}.")
-            
             # Re-enable mic
             if self.mic_btn_icon:
                 self.mic_btn_icon.disabled = False
                 self.mic_btn_icon.icon_color = Colors.ACCENT_PRIMARY
                 self.mic_btn_icon.tooltip = "Voice Input (Push to Talk)"
-            
             self.page.run_thread(lambda: setattr(self.status_text, 'value', f"✅ Ready ({self.whisper._model_size})"))
-            
             # If we are in settings, update the view to show the new device
             if self.current_view == "settings":
                 self.page.run_thread(lambda: self.handle_nav_change("settings"))
@@ -402,7 +474,7 @@ class NihongoSenseiApp:
             err_msg = str(exc)
             self.safe_log(f"[INIT] ERROR loading Whisper: {err_msg}")
             self.page.run_thread(lambda: setattr(self.status_text, 'value', f"❌ Whisper Error"))
-        self.page.update()
+            self.page.update()
 
     def get_stored_api_key(self):
         key_path = os.path.join(config.HISTORY_DIR, ".groq_api_key")
@@ -426,34 +498,29 @@ class NihongoSenseiApp:
             with open(key_path, "w", encoding="utf-8") as f:
                 f.write(key)
             self.safe_log(f"[SETTINGS] Key saved to: {key_path}")
-            
             self.chat = GroqChat(api_key=key)
             self.safe_log("[SETTINGS] GroqChat re-initialized")
             self.status_text.value = "✅ Settings updated"
             self.add_message("assistant", "🤖 Settings updated successfully. Ready to continue.")
-
         except Exception as exc:
             err_msg = str(exc)
             self.safe_log(f"[SETTINGS] ERROR: {err_msg}")
             self.status_text.value = f"❌ Error: {err_msg}"
-        
-        self.page.update()
+            self.page.update()
 
     def handle_fix_cuda(self, e):
         self.safe_log("[SETTINGS] Attempting to install CUDA libraries via pip...")
         self.status_text.value = "⏳ Installing CUDA libraries (pip)..."
         self.page.update()
-        
+
         def run_install():
             try:
                 import subprocess
                 # Install cublas and cudnn for CUDA 12
                 cmd = [sys.executable, "-m", "pip", "install", "nvidia-cublas-cu12", "nvidia-cudnn-cu12"]
                 process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                
                 for line in process.stdout:
                     self.safe_log(f"[PIP] {line.strip()}")
-                
                 process.wait()
                 if process.returncode == 0:
                     self.safe_log("[SETTINGS] CUDA libraries installed. Reloading model...")
@@ -465,38 +532,36 @@ class NihongoSenseiApp:
             except Exception as exc:
                 self.safe_log(f"[SETTINGS] Error during installation: {exc}")
                 self.page.run_thread(lambda: setattr(self.status_text, 'value', "❌ Installation error."))
-        
+
         threading.Thread(target=run_install, daemon=True).start()
 
     def add_message(self, role, text):
         is_assistant = role == "assistant"
         bubble = ChatBubble(role, text)
-        
+
         # Wrap bubble in a constrained container to prevent overflow
         # Use explicit Alignment coordinates for compatibility
         try:
             page_width = self.page.window.width if self.page.window and self.page.window.width else 1100
         except:
             page_width = 1100
-            
+
         bubble_container = ft.Container(
             content=bubble,
             width=min(700, page_width * 0.7),
             alignment=ft.Alignment(-1, 0) if is_assistant else ft.Alignment(1, 0),
         )
-
         row = ft.Row(
             [bubble_container],
             alignment=ft.MainAxisAlignment.START if is_assistant else ft.MainAxisAlignment.END,
         )
         self.chat_messages.controls.append(row)
-        self.chat_messages.update() # Explicitly update the list
+        self.chat_messages.update()  # Explicitly update the list
         self.page.update()
 
     def handle_send_text(self, text):
         if not text or self.is_processing:
             return
-        
         self.chat_input.value = ""
         self.add_message("user", text)
         self.process_chat(text)
@@ -508,7 +573,8 @@ class NihongoSenseiApp:
             self.start_recording()
 
     def start_recording(self):
-        if self.is_processing: return
+        if self.is_processing:
+            return
         self.is_recording = True
         self.mic_btn_icon.icon_color = Colors.TEXT_INVERSE
         self.mic_btn_icon.bgcolor = Colors.ERROR
@@ -522,7 +588,6 @@ class NihongoSenseiApp:
         self.mic_btn_icon.bgcolor = "white05"
         self.status_text.value = "⏳ Processing speech..."
         self.page.update()
-        
         audio_data = self.audio.stop_recording()
         threading.Thread(target=self.process_audio, args=(audio_data,), daemon=True).start()
 
@@ -550,23 +615,21 @@ class NihongoSenseiApp:
             err_msg = str(exc)
             self.safe_log(f"[AUDIO] ERROR: {err_msg}")
             self.page.run_thread(lambda: setattr(self.status_text, 'value', f"❌ Error: {err_msg}"))
-        self.page.update()
+            self.page.update()
 
     def process_chat(self, text):
         self.is_processing = True
         self.status_text.value = "🤖 Thinking..."
         self.page.update()
         self.safe_log(f"[CHAT] User: \"{text}\"")
-        
+
         def run():
             try:
                 response = self.chat.send(text)
                 self.safe_log(f"[CHAT] AI: \"{response[:100]}...\"")
                 self.page.run_thread(lambda: self.add_message("assistant", response))
-                
                 # Speak response
                 threading.Thread(target=self.tts.speak, args=(response,), daemon=True).start()
-                
                 self.page.run_thread(lambda: setattr(self.status_text, 'value', "✅ Ready"))
             except Exception as exc:
                 err_msg = str(exc)
@@ -580,7 +643,7 @@ class NihongoSenseiApp:
 
     def init_backends(self):
         self.safe_log("[INIT] Starting backend initialization...")
-        
+
         # 1. Load persisted settings
         saved_model_size = self.load_config_value("whisper_model_size", config.WHISPER_MODEL_SIZE)
         if saved_model_size != self.whisper._model_size:
@@ -594,7 +657,6 @@ class NihongoSenseiApp:
 
         # 2. Load API key
         api_key = self.get_stored_api_key()
-        
         if not api_key:
             self.status_text.value = "🟡 API Key missing in Settings"
             self.page.update()
@@ -602,7 +664,7 @@ class NihongoSenseiApp:
             try:
                 from session_memory import build_previous_session_summary
                 self.chat = GroqChat(api_key=api_key)
-                
+
                 # Inject context
                 try:
                     summary = build_previous_session_summary()
@@ -621,31 +683,31 @@ class NihongoSenseiApp:
                 self.status_text.value = f"❌ Init Error: {exc}"
 
         self.tts.initialize()
-        
+
         def load_whisper():
             self.safe_log("[INIT] Loading Whisper model...")
             try:
                 self.whisper.load()
                 self.safe_log(f"[INIT] Whisper model loaded ({self.whisper._model_size}).")
-                
                 # Enable mic
                 if self.mic_btn_icon:
                     self.mic_btn_icon.disabled = False
                     self.mic_btn_icon.icon_color = Colors.ACCENT_PRIMARY
                     self.mic_btn_icon.tooltip = "Voice Input (Push to Talk)"
-
                 self.page.run_thread(lambda: setattr(self.status_text, 'value', f"✅ Ready ({self.whisper._model_size})"))
                 self.add_message("assistant", "ようこそ！ I'm ready to practice Japanese with you.")
             except Exception as exc:
                 err_msg = str(exc)
                 self.safe_log(f"[INIT] ERROR loading Whisper: {err_msg}")
                 self.page.run_thread(lambda: setattr(self.status_text, 'value', f"❌ Whisper Error"))
-            self.page.update()
+                self.page.update()
 
         threading.Thread(target=load_whisper, daemon=True).start()
 
+
 def main(page: ft.Page):
     NihongoSenseiApp(page)
+
 
 if __name__ == "__main__":
     ft.app(target=main)
