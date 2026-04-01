@@ -10,9 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     
     env:
-      # Use the specific Free Tier ID from your list
-      MODEL_ID: "opencode/minimax-m2.5-free"
-      # CORRECT 2026 GATEWAY URL
+      # THE FIX: Use the provider-prefixed ID for the SDK
+      MODEL_ID: "minimax/minimax-m2.5"
+      # THE FIX: OpenCode Zen Gateway
       API_BASE_URL: "https://gateway.opencode.ai/v1"
       API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
@@ -29,30 +29,34 @@ jobs:
           import openai
           import sys
 
-          # OpenCode Zen/Free Tier requires the 'opencode/' prefix in the model ID
           client = openai.OpenAI(
               api_key='${{ env.API_KEY }}', 
-              base_url='${{ env.API_BASE_URL }}'
+              base_url='${{ env.API_BASE_URL }}',
+              # Optional: Some 2026 gateways require a provider header
+              default_headers={'X-Provider': 'minimax'}
           )
           
           try:
+              # MiniMax-M2.5 specifically needs temperature set carefully (0.8-1.0)
+              # and doesn't like the 'developer' role — stick to 'system'
               response = client.chat.completions.create(
                   model='${{ env.MODEL_ID }}',
                   messages=[
-                      {'role': 'system', 'content': 'You are a senior Rust architect.'},
-                      {'role': 'user', 'content': 'Generate a production-ready Hello World in Rust.'}
+                      {'role': 'system', 'content': 'You are the MiniMax-M2.5 Architect. Focus on production-grade code.'},
+                      {'role': 'user', 'content': 'Generate a simple Hello World in Rust.'}
                   ],
-                  temperature=0.1
+                  temperature=0.8,
+                  top_p=0.95
               )
               
               if hasattr(response, 'choices') and response.choices:
                   print(response.choices[0].message.content)
               else:
-                  # If the proxy returns an error string instead of JSON
                   print(f'Proxy Error: {response}')
                   sys.exit(1)
 
           except Exception as e:
-              print(f'Connection Error: {e}')
+              # This will now give a much more descriptive error if it fails
+              print(f'SDK Error: {e}')
               sys.exit(1)
           "
