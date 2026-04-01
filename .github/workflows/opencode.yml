@@ -5,6 +5,7 @@ on:
 
 jobs:
   opencode-fix:
+    # Only run if the comment starts with /opencode or /oc
     if: contains(github.event.comment.body, '/opencode') || contains(github.event.comment.body, '/oc')
     runs-on: ubuntu-latest
     permissions:
@@ -26,13 +27,15 @@ jobs:
       - name: Install OpenCode
         run: npm install -g opencode-ai
 
-      - name: Run OpenCode Agent with MiniMax M2.5
+      - name: Run OpenCode Agent
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Use your OpenCode Zen API Key here
-          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }} 
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
         run: |
+          # Explicitly passing the token via the --token flag 
+          # and setting the model to the free MiniMax version
           opencode run \
-            --model zen/minimax-m2.5-free \
-            --issue-number ${{ github.event.issue.number }} \
+            --token "${{ secrets.OPENCODE_ZEN_API_KEY }}" \
+            --model "zen/minimax-m2.5-free" \
+            --issue-number "${{ github.event.issue.number }}" \
             --instruction "${{ github.event.comment.body }}"
