@@ -10,9 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     
     env:
+      # Use the specific Free Tier ID from your list
       MODEL_ID: "opencode/minimax-m2.5-free"
-      API_BASE_URL: "https://api.opencode.ai/v1"
-      # ENSURE THIS SECRET IS SET IN YOUR REPO SETTINGS
+      # CORRECT 2026 GATEWAY URL
+      API_BASE_URL: "https://gateway.opencode.ai/v1"
       API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
     steps:
@@ -20,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Dependencies
-        run: pip install openai
+        run: pip install openai>=2.0.0
 
       - name: Initialize M2.5 Architect
         run: |
@@ -28,35 +29,30 @@ jobs:
           import openai
           import sys
 
+          # OpenCode Zen/Free Tier requires the 'opencode/' prefix in the model ID
           client = openai.OpenAI(
               api_key='${{ env.API_KEY }}', 
               base_url='${{ env.API_BASE_URL }}'
           )
           
           try:
-              # MiniMax M2.5 sometimes prefers lower max_tokens on free tier
               response = client.chat.completions.create(
                   model='${{ env.MODEL_ID }}',
                   messages=[
-                      {'role': 'system', 'content': 'You are a senior dev.'},
-                      {'role': 'user', 'content': 'Write a hello world in Rust.'}
+                      {'role': 'system', 'content': 'You are a senior Rust architect.'},
+                      {'role': 'user', 'content': 'Generate a production-ready Hello World in Rust.'}
                   ],
-                  temperature=0.1,
-                  max_tokens=500 
+                  temperature=0.1
               )
-              
-              # THE FIX: Validate the response type before accessing attributes
-              if isinstance(response, str):
-                  print(f'CRITICAL: API returned a raw string instead of an object: {response}')
-                  sys.exit(1)
               
               if hasattr(response, 'choices') and response.choices:
                   print(response.choices[0].message.content)
               else:
-                  print(f'Unexpected response structure: {response}')
+                  # If the proxy returns an error string instead of JSON
+                  print(f'Proxy Error: {response}')
                   sys.exit(1)
 
           except Exception as e:
-              print(f'SDK Error: {e}')
+              print(f'Connection Error: {e}')
               sys.exit(1)
           "
