@@ -1016,7 +1016,10 @@ class JapaneseTutorApp(ctk.CTk):
         if not is_user and (speakable or translatable):
             self._attach_action_buttons(bubble, text, speakable, translatable)
 
-    def _anim_pad(self, step: int = 0, steps: int = 8) -> None:
+        # Animate the bubble sliding into place
+        self._animate_bubble(bubble, start_px, final_px)
+
+    def _animate_bubble(self, bubble: ctk.CTkFrame, start_px: tuple[int, int], final_px: tuple[int, int], step: int = 0, steps: int = 8) -> None:
         if not bubble.winfo_exists():
             return
         t = min(1.0, step / steps)
@@ -1024,11 +1027,10 @@ class JapaneseTutorApp(ctk.CTk):
         cur_right = int(start_px[1] + (final_px[1] - start_px[1]) * t)
         bubble.pack_configure(padx=(cur_left, cur_right))
         if step < steps:
-            self.after(18, lambda: _anim_pad(step + 1, steps))
+            self.after(18, lambda: self._animate_bubble(bubble, start_px, final_px, step + 1, steps))
         else:
             bubble.pack_configure(padx=final_px)
-        _anim_pad()
-        self._smooth_scroll_bottom()
+            self._smooth_scroll_bottom()
 
     def _attach_action_buttons(
         self,
