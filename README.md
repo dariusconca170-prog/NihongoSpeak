@@ -1,20 +1,21 @@
-# 日本語 Sensei — NihongoSpeak
+# 日本語 Sensei — NihongoSpeak (Slint Edition)
 
-An immersive Japanese language tutor built with Python.
+An immersive Japanese language tutor built with **Slint** (Rust) for the UI, with Python backend services for AI and audio processing.
 
-**Stack:** Llama-3.3-70b via Groq · Faster-Whisper STT · Edge-TTS · CustomTkinter
+**Stack:** Slint (Rust) · Llama-3.3-70b via Groq · Faster-Whisper STT · Edge-TTS · Python backend
 
 ---
 
 ## Features
 
 - **70/30 comprehensible input method** with an adjustable ratio slider (50/50 to 100% Japanese)
-- **Push-to-talk voice input** with live audio visualisation
+- **Push-to-talk voice input** with live audio visualization
 - **Pronunciation scoring** — mora-level feedback after every spoken turn
 - **Spaced repetition** — difficult vocabulary resurfaces on day 1, 3, and 7 intervals
 - **Persistent session memory** — previous session summary injected into every new session
 - **Session review tab** — browse past conversations with corrections highlighted
 - **Vocabulary tracker tab** — see all words you've struggled with and when they're due
+- **Native window management** — proper window sizing without clipping issues
 
 ---
 
@@ -24,100 +25,72 @@ An immersive Japanese language tutor built with Python.
 
 ```bash
 git clone https://github.com/dariusconca170-prog/NihongoSpeak.git
-cd NihongoSpeak
+cd NihongoSpeak/slint
 ```
 
-### 2. Create a virtual environment (recommended)
+### 2. Install Rust
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### 3. Install Python dependencies
 
 ```bash
 python -m venv .venv
-# macOS / Linux
 source .venv/bin/activate
-# Windows
-.venv\Scripts\activate
-```
-
-### 3. Install dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-#### AMD GPU Users (Windows ROCm)
-
-If you have an AMD GPU on Windows, you can enable ROCm acceleration for much faster transcription:
-
-1. Download `rocm-python-wheels-Windows.zip`.
-2. Extract the wheels into a local folder (e.g., `C:\Downloads\rocm_wheels`).
-3. Install the entire batch using a wildcard (pip handles the dependencies between them):
-   ```powershell
-   # From your virtual environment:
-   pip install C:\Downloads\rocm_wheels\*.whl
-   ```
-4. Ensure your `config.py` is set to `WHISPER_DEVICE = "auto"`.
-
-*Note: We do not include these wheels directly in the repository because they are very large (>2GB) and platform-specific to Windows ROCm.*
-
-#### NVIDIA GPU Users (CUDA)
-
-If you have an NVIDIA GPU, install the CUDA-enabled torch:
+### 4. Build the application
 
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+cargo build --release
 ```
 
-### 4. Set your Groq API key
+### 5. Set your Groq API key
 
 Get a free key at [console.groq.com/keys](https://console.groq.com/keys).
 
 **Option A — environment variable (recommended):**
 
 ```bash
-# macOS / Linux
 export GROQ_API_KEY="gsk_..."
-
-# Windows (PowerShell)
-$env:GROQ_API_KEY="gsk_..."
 ```
 
-**Option B — .env file:**
-
-```bash
-cp .env.example .env
-# Edit .env and replace the placeholder with your key
-```
-
-Then load it before running:
-
-```bash
-# macOS / Linux
-set -a && source .env && set +a
-```
-
-**Option C — in-app dialog:**
+**Option B — in-app dialog:**
 
 Leave the variable unset. The app will prompt you for the key on startup.
-The key is held in memory only and never written to disk.
+
+### 6. Run
+
+```bash
+./target/release/nihongo-sensei
+```
 
 ---
 
-## Structure
+## Project Structure (Slint Edition)
 
 ```text
-├── main.py        <-- Entry point (loads src/)
-├── src/           <-- Source files (all .py logic)
-│   ├── app.py
-│   ├── ai_engine.py
-│   ├── config.py
-│   └── ...
-├── requirements.txt
-└── .env.example
-```
-
-### 5. Run
-
-```bash
-python main.py
+slint/
+├── Cargo.toml           # Rust dependencies
+├── build.rs             # Slint build script
+├── src/
+│   ├── main.rs           # Entry point (Rust/Slint)
+│   ├── config.rs         # Configuration constants
+│   ├── audio.rs          # Audio recording (placeholder)
+│   ├── session.rs        # Session data structures
+│   └── vocab.rs          # Vocabulary tracking structures
+├── ui/
+│   └── main_window.slint # UI definition
+├── scripts/
+│   ├── record_audio.py   # Audio recording
+│   ├── transcribe.py     # Whisper transcription
+│   └── tts.py            # Text-to-speech
+├── resources/
+│   └── system_prompt.txt # AI system prompt
+└── README.md
 ```
 
 ---
@@ -132,24 +105,14 @@ PortAudio is required by `sounddevice`. Install via Homebrew:
 brew install portaudio
 ```
 
-If you see `OSError: [Errno -9996] Invalid input device`, check System Settings > Privacy > Microphone and grant access to Terminal / your Python environment.
-
 ### Windows
 
-No extra drivers needed on Windows 10/11. If your mic is not detected, check Settings > Privacy > Microphone and ensure microphone access is on.
-
-If you hear no TTS audio, install or update your audio drivers and ensure pygame can initialise a mixer (the app falls back gracefully if it cannot).
+No extra drivers needed on Windows 10/11.
 
 ### Linux (Ubuntu / Debian)
 
 ```bash
 sudo apt install portaudio19-dev python3-dev
-```
-
-For TTS playback, pygame requires SDL2:
-
-```bash
-sudo apt install libsdl2-mixer-2.0-0
 ```
 
 ---
@@ -162,21 +125,18 @@ All session and vocabulary data is stored locally in `~/.nihongo_sensei/`:
 ~/.nihongo_sensei/
   sessions/          # auto-saved session JSON files
   vocab.json         # spaced repetition vocabulary data
+  config.json        # user settings (API key)
 ```
 
 No data is sent anywhere except directly to the Groq API (your conversation turns only).
 
 ---
 
-## Whisper model sizes
+## Window Management
 
-Edit `config.py` to change the local STT model:
+This Slint edition fixes the window resizing and button clipping issues present in the Flet version. Features:
 
-| `WHISPER_MODEL_SIZE` | RAM   | Speed  | Accuracy |
-|----------------------|-------|--------|----------|
-| `tiny`               | ~1 GB | Fast   | Basic    |
-| `base`               | ~1 GB | Fast   | Good     |
-| `small`              | ~2 GB | Medium | Better   |
-| `medium`             | ~5 GB | Slower | Best     |
-
-The default is `medium`. On GPU with `int8` quantisation it loads in under seconds.
+- **Proper window constraints** with minimum size (800x600)
+- **Responsive layout** that adapts to window size
+- **No fixed dimensions** — UI scales gracefully
+- **Native window decorations** — standard title bar with close/minimize/maximize
