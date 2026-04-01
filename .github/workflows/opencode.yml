@@ -31,10 +31,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_TOKEN: ${{ secrets.OPENCODE_ZEN_API_KEY }}
         run: |
-          # Use a simpler way to get the instruction text
-          INSTRUCTION="${{ github.event.comment.body }}"
-          
-          # Strip the trigger words
-          CLEAN_MSG=$(echo "$INSTRUCTION" | sed 's/\/oc //g; s/\/opencode //g')
-
-          opencode run "$CLEAN_MSG" --model minimax-m2.5
+          # We use env to safely pass the comment without shell expansion issues
+          opencode run "${{ github.event.comment.body }}" --model minimax-m2.5
