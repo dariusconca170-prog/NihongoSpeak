@@ -379,17 +379,22 @@ class _HistoryDialog(ctk.CTkToplevel):
 # MAIN APPLICATION WINDOW
 # ════════════════════════════════════════════════════════════════
 class JapaneseTutorApp(ctk.CTk):
+    # Fixed window dimensions
+    WINDOW_WIDTH: int = 1020
+    WINDOW_HEIGHT: int = 850
+
     def __init__(self) -> None:
         super().__init__()
         self.title("日本語 Sensei — Japanese Language Tutor")
-        self.geometry("1020x850")
-        self.minsize(820, 680)
         
-        # Configure resizable window behavior
-        self.resizable(True, True)
+        # Disable resizing to maintain fixed window size
+        self.resizable(False, False)
         
-        # Bind resize event to handle layout updates
-        self.bind("<Configure>", self._on_window_resize)
+        # Center window on screen
+        self._center_window()
+        
+        # Set fixed geometry
+        self.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}")
         
         self.configure(fg_color=Colors.BG_DARK)
 
@@ -397,9 +402,6 @@ class JapaneseTutorApp(ctk.CTk):
         self._timer_id: Optional[str] = None
         self._last_expected_japanese: str = ""
         self._is_processing: bool = False
-        self._timer_id: Optional[str] = None
-        self._window_width: int = 1020
-        self._window_height: int = 850
 
         # backends
         self.audio = AudioManager()
@@ -429,26 +431,15 @@ class JapaneseTutorApp(ctk.CTk):
             self._status(f"FATAL: Failed to initialize backends: {e}")
             import traceback
             traceback.print_exc()
-            # Optionally, exit the application gracefully here if initialization fails critically
-            # self.destroy()
 
-    # ────────────────────────────────────────────────────────────
-    # WINDOW RESIZE HANDLER
-    # ────────────────────────────────────────────────────────────
-    def _on_window_resize(self, event: tk.Event) -> None:
-        """Handle window resize events to update internal dimensions."""
-        # Only handle top-level window resize events, not child widgets
-        if event.widget == self:
-            width = self.winfo_width()
-            height = self.winfo_height()
-            # Update internal tracking
-            self._window_width = max(width, self.minsize()[0])
-            self._window_height = max(height, self.minsize()[1])
-            
-            # Update geometry to prevent growth issues
-            # Only constrain if significantly different to avoid thrashing
-            if abs(width - self._window_width) > 100 or abs(height - self._window_height) > 100:
-                self.geometry(f"{self._window_width}x{self._window_height}")
+    def _center_window(self) -> None:
+        """Center the window on the screen."""
+        self.update_idletasks()
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - self.WINDOW_WIDTH) // 2
+        y = (screen_height - self.WINDOW_HEIGHT) // 2
+        self.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}+{x}+{y}")
 
     # ────────────────────────────────────────────────────────────
     # SHUTDOWN
