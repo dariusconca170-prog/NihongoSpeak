@@ -1,35 +1,47 @@
-name: OpenCode AI Agent (MiniMax)
+name: M2.5-Agent-Deploy
+
 on:
-  issue_comment:
-    types: [created]
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
 
 jobs:
-  opencode-fix:
-    if: contains(github.event.comment.body, '/opencode') || contains(github.event.comment.body, '/oc')
+  agent-execution:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
+    
+    env:
+      # The exact model string from your list
+      MODEL_ID: "opencode/minimax-m2.5-free"
+      # Base URL for the OpenCode/MiniMax provider
+      API_BASE_URL: "https://api.opencode.ai/v1"
+      API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Setup Agent Environment
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
+          python-version: '3.11'
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install OpenCode
-        run: npm install -g opencode-ai
-
-      - name: Run OpenCode Agent
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENCODE_TOKEN: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      - name: Initialize M2.5 Architect
         run: |
-          # This will list everything available so we can see the exact spelling
-          opencode models
+          pip install openai  # MiniMax uses OpenAI-compatible SDK
+          python -c "
+          import openai
+          client = openai.OpenAI(api_key='${{ env.API_KEY }}', base_url='${{ env.API_BASE_URL }}')
+          
+          response = client.chat.completions.create(
+              model='${{ env.MODEL_ID }}',
+              messages=[
+                  {'role': 'system', 'content': 'You are the MiniMax-M2.5 Architect.'},
+                  {'role': 'user', 'content': 'Analyze the codebase and suggest optimizations.'}
+              ],
+              temperature=0.1 # Low temp for precise coding
+          )
+          print(response.choices[0].message.content)
+          "
+
+      - name: Log Execution
+        run: echo "Deployment of ${{ env.MODEL_ID }} complete."
