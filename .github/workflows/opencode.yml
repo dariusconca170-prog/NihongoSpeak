@@ -10,9 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     
     env:
-      # The exact model string from your list
       MODEL_ID: "opencode/minimax-m2.5-free"
-      # Base URL for the OpenCode/MiniMax provider
       API_BASE_URL: "https://api.opencode.ai/v1"
       API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
@@ -25,23 +23,35 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Dependencies
+        run: pip install openai>=2.0.0
+
       - name: Initialize M2.5 Architect
         run: |
-          pip install openai  # MiniMax uses OpenAI-compatible SDK
           python -c "
           import openai
-          client = openai.OpenAI(api_key='${{ env.API_KEY }}', base_url='${{ env.API_BASE_URL }}')
-          
-          response = client.chat.completions.create(
-              model='${{ env.MODEL_ID }}',
-              messages=[
-                  {'role': 'system', 'content': 'You are the MiniMax-M2.5 Architect.'},
-                  {'role': 'user', 'content': 'Analyze the codebase and suggest optimizations.'}
-              ],
-              temperature=0.1 # Low temp for precise coding
+          import sys
+
+          client = openai.OpenAI(
+              api_key='${{ env.API_KEY }}', 
+              base_url='${{ env.API_BASE_URL }}'
           )
-          print(response.choices[0].message.content)
+          
+          try:
+              response = client.chat.completions.create(
+                  model='${{ env.MODEL_ID }}',
+                  messages=[
+                      {'role': 'system', 'content': 'You are the MiniMax-M2.5 Architect.'},
+                      {'role': 'user', 'content': 'Analyze the codebase and suggest optimizations.'}
+                  ],
+                  temperature=0.1
+              )
+              # In OpenAI v2+, response is an object, not a dict
+              print(response.choices[0].message.content)
+          except Exception as e:
+              print(f'API Error: {e}')
+              sys.exit(1)
           "
 
       - name: Log Execution
-        run: echo "Deployment of ${{ env.MODEL_ID }} complete."
+        run: echo "Deployment of ${{ env.env.MODEL_ID }} complete."
