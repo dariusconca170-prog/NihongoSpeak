@@ -14,7 +14,7 @@ component MessageBubble inherits Rectangle {
     border-color: is-user ? #3D3D3E : #2E2E4E;
     max-width: 460px;
     height: inner-layout.preferred-height + 20px;
-
+    
     inner-layout := VerticalLayout {
         spacing: 4px;
         padding-left: 14px;
@@ -290,6 +290,7 @@ export component MainWindow inherits Window {
                     background: current-tab == 0 ? accent-primary : transparent;
                     height: 40px;
                     horizontal-stretch: 1;
+                    animate background { duration: 150ms; }
 
                     Text {
                         text: "💬 Chat";
@@ -298,6 +299,7 @@ export component MainWindow inherits Window {
                         color: current-tab == 0 ? text-primary : text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        animate color { duration: 150ms; }
                     }
 
                     TouchArea {
@@ -309,14 +311,16 @@ export component MainWindow inherits Window {
                     background: current-tab == 1 ? accent-primary : transparent;
                     height: 40px;
                     horizontal-stretch: 1;
+                    animate background { duration: 150ms; }
 
                     Text {
-                        text: "📖 Session Review";
+                        text: "📖 Sessions";
                         font-size: 13px;
                         font-weight: current-tab == 1 ? 700 : 400;
                         color: current-tab == 1 ? text-primary : text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        animate color { duration: 150ms; }
                     }
 
                     TouchArea {
@@ -328,14 +332,16 @@ export component MainWindow inherits Window {
                     background: current-tab == 2 ? accent-primary : transparent;
                     height: 40px;
                     horizontal-stretch: 1;
+                    animate background { duration: 150ms; }
 
                     Text {
-                        text: "📊 Vocabulary";
+                        text: "📊 Vocab";
                         font-size: 13px;
                         font-weight: current-tab == 2 ? 700 : 400;
                         color: current-tab == 2 ? text-primary : text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        animate color { duration: 150ms; }
                     }
 
                     TouchArea {
@@ -347,6 +353,7 @@ export component MainWindow inherits Window {
                     background: current-tab == 3 ? accent-primary : transparent;
                     height: 40px;
                     horizontal-stretch: 1;
+                    animate background { duration: 150ms; }
 
                     Text {
                         text: "⚙️ Settings";
@@ -355,6 +362,7 @@ export component MainWindow inherits Window {
                         color: current-tab == 3 ? text-primary : text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        animate color { duration: 150ms; }
                     }
 
                     TouchArea {
@@ -368,96 +376,107 @@ export component MainWindow inherits Window {
         Rectangle {
             background: bg-dark;
             vertical-stretch: 1;
+            clip: true;
+
+            // Animation properties
+            property <float> tab-opacity: 1.0;
+            property <length> tab-offset-x: 0px;
+
+            animate tab-opacity { duration: 200ms; easing: ease-in-out; }
+            animate tab-offset-x { duration: 250ms; easing: ease-out; }
 
             // Chat Tab
-            if current-tab == 0 : VerticalLayout {
-                spacing: 0;
-                padding: 0;
+            if current-tab == 0 : Rectangle {
+                opacity: tab-opacity;
+                x: tab-offset-x;
 
-                // Chat messages
-                ScrollView {
-                    vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 0;
+                    padding: 0;
 
-                    VerticalLayout {
-                        spacing: 10px;
-                        padding: 10px;
-                        alignment: start;
+                    // Chat messages
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 10px;
+                            padding: 10px;
+                            alignment: start;
 
-                        for msg[i] in messages : MessageBubble {
-                            role: msg.role;
-                            content: msg.content;
-                            play-audio-requested(text) => { root.play-audio(text); }
-                            translate-requested(text) => { root.translate(text); }
+                            for msg[i] in messages : MessageBubble {
+                                role: msg.role;
+                                content: msg.content;
+                                play-audio-requested(text) => { root.play-audio(text); }
+                                translate-requested(text) => { root.translate(text); }
+                            }
                         }
                     }
-                }
 
-                // Input area
-                Rectangle {
-                    background: bg-secondary;
-                    height: 130px;
+                    // Input area
+                    Rectangle {
+                        background: bg-secondary;
+                        height: 130px;
 
-                    VerticalLayout {
-                        spacing: 8px;
-                        padding-left: 20px;
-                        padding-right: 20px;
-                        padding-top: 8px;
-                        padding-bottom: 8px;
-
-                        HorizontalLayout {
+                        VerticalLayout {
                             spacing: 8px;
+                            padding-left: 20px;
+                            padding-right: 20px;
+                            padding-top: 8px;
+                            padding-bottom: 8px;
 
-                            msg-input := LineEdit {
-                                placeholder-text: "✍ Type in Japanese or English...";
-                                height: 44px;
-                                font-size: 14px;
-                                horizontal-stretch: 1;
-                                text <=> input-text;
-                                accepted(text) => {
-                                    if text != "" {
-                                        send-message(text);
-                                        input-text = "";
+                            HorizontalLayout {
+                                spacing: 8px;
+                                msg-input := LineEdit {
+                                    placeholder-text: "✍ Type in Japanese or English...";
+                                    height: 44px;
+                                    font-size: 14px;
+                                    horizontal-stretch: 1;
+                                    text <=> input-text;
+                                    accepted(text) => {
+                                        if text != "" {
+                                            send-message(text);
+                                            input-text = "";
+                                        }
+                                    }
+                                }
+
+                                Button {
+                                    text: "Send ➤";
+                                    width: 90px;
+                                    height: 44px;
+                                    clicked => {
+                                        if input-text != "" {
+                                            send-message(input-text);
+                                            input-text = "";
+                                        }
                                     }
                                 }
                             }
 
-                            Button {
-                                text: "Send ➤";
-                                width: 90px;
-                                height: 44px;
-                                clicked => {
-                                    if input-text != "" {
-                                        send-message(input-text);
-                                        input-text = "";
-                                    }
+                            // PTT Button
+                            ptt-btn := Rectangle {
+                                height: 60px;
+                                border-radius: 14px;
+                                border-width: 2px;
+                                border-color: is-recording ? #e57373 : #81C784;
+                                background: is-recording ? ptt-recording : ptt-ready;
+                                
+                                Text {
+                                    text: is-recording ? "🔴 Recording..." : "🎤 Hold to Speak";
+                                    font-size: 20px;
+                                    font-weight: 700;
+                                    color: white;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
                                 }
-                            }
-                        }
 
-                        // PTT Button
-                        ptt-btn := Rectangle {
-                            height: 60px;
-                            border-radius: 14px;
-                            border-width: 2px;
-                            border-color: is-recording ? #e57373 : #81C784;
-                            background: is-recording ? ptt-recording : ptt-ready;
-
-                            Text {
-                                text: is-recording ? "🔴 Recording..." : "🎤 Hold to Speak";
-                                font-size: 20px;
-                                font-weight: 700;
-                                color: white;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            TouchArea {
-                                pointer-event(event) => {
-                                    if event.kind == PointerEventKind.down {
-                                        start-recording();
-                                    }
-                                    if event.kind == PointerEventKind.up {
-                                        stop-recording();
+                                TouchArea {
+                                    pointer-event(event) => {
+                                        if event.kind == PointerEventKind.down {
+                                            start-recording();
+                                        }
+                                        if event.kind == PointerEventKind.up {
+                                            stop-recording();
+                                        }
                                     }
                                 }
                             }
@@ -467,64 +486,68 @@ export component MainWindow inherits Window {
             }
 
             // Session Review Tab
-            if current-tab == 1 : VerticalLayout {
-                spacing: 10px;
-                padding: 10px;
+            if current-tab == 1 : Rectangle {
+                opacity: tab-opacity;
+                x: tab-offset-x;
 
-                Text {
-                    text: "📖 Session Review";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: text-primary;
-                }
+                VerticalLayout {
+                    spacing: 10px;
+                    padding: 10px;
 
-                ScrollView {
-                    vertical-stretch: 1;
+                    Text {
+                        text: "📖 Session Review";
+                        font-size: 16px;
+                        font-weight: 700;
+                        color: text-primary;
+                    }
 
-                    VerticalLayout {
-                        spacing: 8px;
-                        padding: 4px;
-                        alignment: start;
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 8px;
+                            padding: 4px;
+                            alignment: start;
 
-                        for sess in sessions : Rectangle {
-                            background: assistant-bubble;
-                            border-radius: 10px;
-                            height: sess-layout.preferred-height + 24px;
+                            for sess in sessions : Rectangle {
+                                background: assistant-bubble;
+                                border-radius: 10px;
+                                height: sess-layout.preferred-height + 24px;
 
-                            sess-layout := VerticalLayout {
-                                spacing: 4px;
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                padding-top: 10px;
-                                padding-bottom: 10px;
+                                sess-layout := VerticalLayout {
+                                    spacing: 4px;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    padding-top: 10px;
+                                    padding-bottom: 10px;
 
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    Text { text: "🗓 " + sess.started; font-size: 12px; font-weight: 700; color: text-primary; }
-                                    Text { text: "📚 " + sess.level; font-size: 11px; font-weight: 700; color: accent-gold; }
-                                    Text { text: "💬 " + sess.message-count + " msgs"; font-size: 11px; color: text-secondary; }
-                                }
-
-                                Text {
-                                    text: "\"" + sess.preview + "\"";
-                                    font-size: 11px;
-                                    color: text-secondary;
-                                    wrap: word-wrap;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    Button {
-                                        text: "▶ Load";
-                                        width: 80px;
-                                        height: 28px;
-                                        clicked => { load-session(sess.id); }
+                                    HorizontalLayout {
+                                        spacing: 12px;
+                                        Text { text: "🗓 " + sess.started; font-size: 12px; font-weight: 700; color: text-primary; }
+                                        Text { text: "📚 " + sess.level; font-size: 11px; font-weight: 700; color: accent-gold; }
+                                        Text { text: "💬 " + sess.message-count + " msgs"; font-size: 11px; color: text-secondary; }
                                     }
-                                    Button {
-                                        text: "🗑 Delete";
-                                        width: 80px;
-                                        height: 28px;
-                                        clicked => { delete-session(sess.id); }
+
+                                    Text {
+                                        text: "\"" + sess.preview + "\"";
+                                        font-size: 11px;
+                                        color: text-secondary;
+                                        wrap: word-wrap;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Button {
+                                            text: "▶ Load";
+                                            width: 80px;
+                                            height: 28px;
+                                            clicked => { load-session(sess.id); }
+                                        }
+                                        Button {
+                                            text: "🗑 Delete";
+                                            width: 80px;
+                                            height: 28px;
+                                            clicked => { delete-session(sess.id); }
+                                        }
                                     }
                                 }
                             }
@@ -534,52 +557,56 @@ export component MainWindow inherits Window {
             }
 
             // Vocabulary Tab
-            if current-tab == 2 : VerticalLayout {
-                spacing: 10px;
-                padding: 10px;
+            if current-tab == 2 : Rectangle {
+                opacity: tab-opacity;
+                x: tab-offset-x;
 
-                Text {
-                    text: "📊 Tracked Vocabulary (Spaced Repetition)";
-                    font-size: 15px;
-                    font-weight: 700;
-                    color: text-primary;
-                }
+                VerticalLayout {
+                    spacing: 10px;
+                    padding: 10px;
 
-                // Header
-                HorizontalLayout {
-                    height: 30px;
-                    Text { text: "Word"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
-                    Text { text: "Reading"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
-                    Text { text: "Struggles"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
-                    Text { text: "Next Review"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
-                }
+                    Text {
+                        text: "📊 Tracked Vocabulary (Spaced Repetition)";
+                        font-size: 15px;
+                        font-weight: 700;
+                        color: text-primary;
+                    }
 
-                ScrollView {
-                    vertical-stretch: 1;
+                    // Header
+                    HorizontalLayout {
+                        height: 30px;
+                        Text { text: "Word"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                        Text { text: "Reading"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                        Text { text: "Struggles"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                        Text { text: "Next Review"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                    }
 
-                    VerticalLayout {
-                        spacing: 2px;
-                        alignment: start;
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 2px;
+                            alignment: start;
 
-                        for word in vocab : Rectangle {
-                            background: word.is-due ? #1a1a10 : transparent;
-                            border-radius: 4px;
-                            height: 28px;
+                            for word in vocab : Rectangle {
+                                background: word.is-due ? #1a1a10 : transparent;
+                                border-radius: 4px;
+                                height: 28px;
 
-                            HorizontalLayout {
-                                spacing: 4px;
-                                padding-left: 4px;
-                                padding-right: 4px;
-                                Text {
-                                    text: word.word;
-                                    font-size: 12px;
-                                    color: word.is-due ? accent-gold : text-primary;
-                                    horizontal-stretch: 1;
-                                    vertical-alignment: center;
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    padding-left: 4px;
+                                    padding-right: 4px;
+                                    Text {
+                                        text: word.word;
+                                        font-size: 12px;
+                                        color: word.is-due ? accent-gold : text-primary;
+                                        horizontal-stretch: 1;
+                                        vertical-alignment: center;
+                                    }
+                                    Text { text: word.reading; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
+                                    Text { text: word.struggles; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
+                                    Text { text: word.next-review; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
                                 }
-                                Text { text: word.reading; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
-                                Text { text: word.struggles; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
-                                Text { text: word.next-review; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
                             }
                         }
                     }
@@ -587,40 +614,42 @@ export component MainWindow inherits Window {
             }
 
             // Settings Tab
-            if current-tab == 3 : VerticalLayout {
-                spacing: 20px;
-                padding: 20px;
-                alignment: start;
+            if current-tab == 3 : Rectangle {
+                opacity: tab-opacity;
+                x: tab-offset-x;
 
                 VerticalLayout {
-                    spacing: 15px;
+                    spacing: 20px;
+                    padding: 20px;
                     alignment: start;
 
-                    Text { text: "🔑 Groq API Key"; font-size: 14px; font-weight: 700; color: text-primary; }
+                    VerticalLayout {
+                        spacing: 15px;
+                        alignment: start;
 
-                    api-key-input := LineEdit {
-                        placeholder-text: "gsk_...";
-                        input-type: password;
-                        height: 44px;
-                        font-size: 14px;
-                        accepted(text) => { save-api-key(text); }
+                        Text { text: "🔑 Groq API Key"; font-size: 14px; font-weight: 700; color: text-primary; }
+
+                        api-key-input := LineEdit {
+                            placeholder-text: "gsk_...";
+                            input-type: password;
+                            height: 44px;
+                            font-size: 14px;
+                            accepted(text) => { save-api-key(text); }
+                        }
+
+                        Text {
+                            text: "Get a free key → console.groq.com/keys";
+                            font-size: 11px;
+                            color: accent-green;
+                        }
+
+                        Rectangle { height: 1px; background: #1c1c3a; }
+
+                        Text { text: "🎛 Engine Settings"; font-size: 14px; font-weight: 700; color: text-primary; }
+                        Text { text: "Whisper Model: medium (configurable)"; font-size: 12px; color: text-secondary; }
+                        Text { text: "Transcription Language: Japanese"; font-size: 12px; color: text-secondary; }
+                        Text { text: "Device: auto (GPU if available)"; font-size: 12px; color: text-secondary; }
                     }
-
-                    Text {
-                        text: "Get a free key → console.groq.com/keys";
-                        font-size: 11px;
-                        color: accent-green;
-                    }
-
-                    Rectangle { height: 1px; background: #1c1c3a; }
-
-                    Text { text: "🎛 Engine Settings"; font-size: 14px; font-weight: 700; color: text-primary; }
-
-                    Text { text: "Whisper Model: medium (configurable)"; font-size: 12px; color: text-secondary; }
-
-                    Text { text: "Transcription Language: Japanese"; font-size: 12px; color: text-secondary; }
-
-                    Text { text: "Device: auto (GPU if available)"; font-size: 12px; color: text-secondary; }
                 }
             }
         }

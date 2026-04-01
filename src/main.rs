@@ -3,7 +3,7 @@ use log::{error, info};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use slint::{SharedString, ModelRc, VecModel};
+use slint::{SharedString, ModelRc, VecModel, Model};
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -244,9 +244,6 @@ fn set_status(app: &slint::Weak<MainWindow>, text: &str) {
     }).ok();
 }
 
-fn set_status_sync(window: &MainWindow, text: &str) {
-    window.set_status_text(SharedString::from(text));
-}
 
 // ════════════════════════════════════════════════════════════════
 // SLINT MAIN
