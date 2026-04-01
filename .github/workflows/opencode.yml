@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Dependencies
         run: pip install openai>=2.30.0
@@ -22,12 +24,10 @@ jobs:
           API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           cat > run_agent.py << 'EOF'
-          import openai, sys, os
+          import openai, sys, os, re
 
           model_id = os.environ.get('MODEL_ID', 'NOT SET')
           api_key = os.environ.get('API_KEY', '')
-
-          print(f"Using model: {model_id}")
 
           if not api_key or len(api_key) < 10:
               print('CRITICAL: API_KEY missing or invalid.')
@@ -39,21 +39,19 @@ jobs:
           )
 
           try:
+              # We ask specifically for a structured output to make parsing easier
               response = client.chat.completions.create(
                   model=model_id,
                   messages=[
-                      {'role': 'system', 'content': 'You are a senior Rust architect.'},
-                      {'role': 'user', 'content': 'Write a production Hello World in Rust.'}
+                      {'role': 'system', 'content': 'You are a senior Rust architect. Always wrap code in triple backticks with the filename in a comment on the first line.'},
+                      {'role': 'user', 'content': 'Create a production-ready Hello World. I need Cargo.toml and src/main.rs.'}
                   ],
                   temperature=0.8
               )
-              if hasattr(response, 'choices') and response.choices:
-                  print(response.choices[0].message.content)
-              else:
-                  print(f'Gateway Error: {response}')
-                  sys.exit(1)
-          except Exception as e:
-              print(f'SDK Error: {e}')
-              sys.exit(1)
-          EOF
-          python run_agent.py
+              
+              content = response.choices[0].message.content
+              print("--- AI RESPONSE RECEIVED ---")
+              print(content)
+              
+              # Simple parser to extract files from markdown blocks
+              code_blocks = re.findall(r'
