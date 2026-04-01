@@ -37,5 +37,4 @@ jobs:
           # Strip the trigger words
           CLEAN_MSG=$(echo "$INSTRUCTION" | sed 's/\/oc //g; s/\/opencode //g')
 
-          # Use the 'zen/' prefix again but without extra trailing slashes
-          opencode run "$CLEAN_MSG" --model zen/minimax-m2.5-free
+          opencode run "$CLEAN_MSG" --model minimax-m2.5
