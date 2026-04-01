@@ -30,12 +30,10 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            # Use env var to avoid shell quoting issues with special characters
             INSTRUCTION="${COMMENT_BODY#/oc }"
           else
             INSTRUCTION="Write a production Hello World in Rust."
           fi
-          # Write to GITHUB_OUTPUT using heredoc to handle multiline/special chars
           EOF_MARKER=$(openssl rand -hex 8)
           echo "instruction<<${EOF_MARKER}" >> $GITHUB_OUTPUT
           echo "${INSTRUCTION}" >> $GITHUB_OUTPUT
@@ -87,7 +85,8 @@ jobs:
               'Each item MUST use exactly these two keys: "path" and "content".\n'
               'Example: [{"path": "src/main.rs", "content": "fn main() {}"}]\n'
               'Return the COMPLETE file content for each changed file.\n'
-              'Only include files that actually need changes.\n\n'
+              'Only include files that actually need changes.\n'
+              'NEVER include .github/workflows/ files in your response.\n\n'
               f'CURRENT REPOSITORY FILES:\n\n{context_block}'
           )
 
@@ -111,6 +110,17 @@ jobs:
                   pass
               return None
 
+          def normalize(parsed):
+              result = []
+              for item in parsed:
+                  p = item.get('path') or item.get('file') or item.get('filename') or item.get('name')
+                  c = item.get('content') or item.get('code') or item.get('text') or ''
+                  if p:
+                      result.append({'path': p, 'content': c})
+                  else:
+                      print(f"WARNING: Could not find path key in item: {list(item.keys())}")
+              return result
+
           def call_model(messages):
               response = client.chat.completions.create(
                   model=model_id,
@@ -133,11 +143,12 @@ jobs:
               sys.exit(1)
 
           print(f"Raw output ({len(raw)} chars): {raw[:300]}")
+          # Always clean fences first, then try to parse
           output = clean(raw)
           parsed = try_parse(output)
 
           if parsed is None:
-              print("Attempt 1 returned prose. Retrying with stricter prompt...")
+              print("Attempt 1 not valid JSON after cleaning. Retrying...")
               messages.append({'role': 'assistant', 'content': raw})
               messages.append({
                   'role': 'user',
@@ -155,23 +166,23 @@ jobs:
                   print(f"Attempt 2 output ({len(raw2)} chars): {raw2[:300]}")
                   output = clean(raw2)
                   parsed = try_parse(output)
+          else:
+              print("Attempt 1 parsed successfully after cleaning.")
 
           if parsed is None:
               print("Both attempts failed. Saving prose as fallback.")
               with open('/tmp/agent_output.json', 'w') as f:
                   json.dump({"prose": output}, f)
           else:
-              normalized = []
-              for item in parsed:
-                  p = item.get('path') or item.get('file') or item.get('filename') or item.get('name')
-                  c = item.get('content') or item.get('code') or item.get('text') or ''
-                  if p:
-                      normalized.append({'path': p, 'content': c})
-                  else:
-                      print(f"WARNING: Could not find path key in item: {list(item.keys())}")
-              print(f"Parsed {len(normalized)} file(s) to write.")
+              normalized = normalize(parsed)
+              # Block workflow files - agent must never modify them
+              safe = [f for f in normalized if not f['path'].startswith('.github/workflows/')]
+              blocked = [f['path'] for f in normalized if f['path'].startswith('.github/workflows/')]
+              if blocked:
+                  print(f"BLOCKED (workflow files cannot be modified by agent): {blocked}")
+              print(f"Writing {len(safe)} file(s).")
               with open('/tmp/agent_output.json', 'w') as f:
-                  json.dump(normalized, f)
+                  json.dump(safe, f)
 
           print('Agent output saved.')
           PYEOF
