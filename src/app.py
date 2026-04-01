@@ -384,6 +384,13 @@ class JapaneseTutorApp(ctk.CTk):
         self.title("日本語 Sensei — Japanese Language Tutor")
         self.geometry("1020x850")
         self.minsize(820, 680)
+        
+        # Configure resizable window behavior
+        self.resizable(True, True)
+        
+        # Bind resize event to handle layout updates
+        self.bind("<Configure>", self._on_window_resize)
+        
         self.configure(fg_color=Colors.BG_DARK)
 
         self._is_recording: bool = False
@@ -391,6 +398,8 @@ class JapaneseTutorApp(ctk.CTk):
         self._last_expected_japanese: str = ""
         self._is_processing: bool = False
         self._timer_id: Optional[str] = None
+        self._window_width: int = 1020
+        self._window_height: int = 850
 
         # backends
         self.audio = AudioManager()
@@ -422,6 +431,24 @@ class JapaneseTutorApp(ctk.CTk):
             traceback.print_exc()
             # Optionally, exit the application gracefully here if initialization fails critically
             # self.destroy()
+
+    # ────────────────────────────────────────────────────────────
+    # WINDOW RESIZE HANDLER
+    # ────────────────────────────────────────────────────────────
+    def _on_window_resize(self, event: tk.Event) -> None:
+        """Handle window resize events to update internal dimensions."""
+        # Only handle top-level window resize events, not child widgets
+        if event.widget == self:
+            width = self.winfo_width()
+            height = self.winfo_height()
+            # Update internal tracking
+            self._window_width = max(width, self.minsize()[0])
+            self._window_height = max(height, self.minsize()[1])
+            
+            # Update geometry to prevent growth issues
+            # Only constrain if significantly different to avoid thrashing
+            if abs(width - self._window_width) > 100 or abs(height - self._window_height) > 100:
+                self.geometry(f"{self._window_width}x{self._window_height}")
 
     # ────────────────────────────────────────────────────────────
     # SHUTDOWN
@@ -507,48 +534,32 @@ class JapaneseTutorApp(ctk.CTk):
     # ────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, minsize=10)  # Small fixed header spacer
+        self.grid_rowconfigure(1, weight=1)    # Main content area (tabs)
+        self.grid_rowconfigure(2, weight=0)   # Input area
+        self.grid_rowconfigure(3, weight=0)    # Status bar (fixed)
+        
         self._build_header()
         self._build_tabview()
         self._build_input_area()
         self._build_status_bar()
 
-    def _build_tabview(self) -> None:
-        """Build the main tabview containing chat and session review tabs."""
-        self._tabview = ctk.CTkTabview(
-            self,
-            fg_color=Colors.BG_SECONDARY,
-            segmented_button_fg_color=Colors.BG_DARK,
-            segmented_button_selected_color=Colors.SEND_BTN,
-            segmented_button_selected_hover_color=Colors.SEND_BTN_HOVER,
-            segmented_button_unselected_color=Colors.BG_SECONDARY,
-            corner_radius=14,
-            border_width=1,
-            border_color=Colors.CHAT_BORDER,
-        )
-        self._tabview.grid(row=1, column=0, sticky="nsew", padx=20, pady=8)
-        self._tabview.add("💬 Chat")
-        self._tabview.add("📖 Session Review")
-        self._tabview.add("📊 Vocabulary")
-
-        self._tabview.tab("💬 Chat").grid_columnconfigure(0, weight=1)
-        self._tabview.tab("💬 Chat").grid_rowconfigure(0, weight=1)
-        self._tabview.tab("📖 Session Review").grid_columnconfigure(0, weight=1)
-        self._tabview.tab("📖 Session Review").grid_rowconfigure(0, weight=1)
-        self._tabview.tab("📊 Vocabulary").grid_columnconfigure(0, weight=1)
-        self._tabview.tab("📊 Vocabulary").grid_rowconfigure(0, weight=1)
-
-        self._build_chat_area()
-        self._build_session_review_tab()
-        self._build_vocab_tab()
-
     # ── header ──────────────────────────────────────────────────
     def _build_header(self) -> None:
         hdr = ctk.CTkFrame(self, fg_color=Colors.HEADER_BG, corner_radius=0)
-        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+        
         pad = ctk.CTkFrame(hdr, fg_color="transparent")
-        pad.pack(fill="x", padx=22, pady=(14, 12))
-        pad.grid_columnconfigure(3, weight=1)
+        pad.pack(fill="both", expand=True, padx=22, pady=(14, 12))
+        pad.grid_columnconfigure(0, weight=1)
+        pad.grid_columnconfigure(1, weight=0)
+        pad.grid_columnconfigure(2, weight=0)
+        pad.grid_columnconfigure(3, weight=0)
+        pad.grid_columnconfigure(4, weight=1)
+        pad.grid_columnconfigure(5, weight=0)
+        pad.grid_columnconfigure(6, weight=0)
+        pad.grid_columnconfigure(7, weight=0)
+        pad.grid_columnconfigure(8, weight=0)
 
         # row 0: title
         tbox = ctk.CTkFrame(pad, fg_color="transparent")
@@ -567,7 +578,7 @@ class JapaneseTutorApp(ctk.CTk):
         self.mic_cb = ctk.CTkComboBox(
             pad,
             values=names,
-            width=260,
+            width=200,
             command=self._on_mic_changed,
             font=ctk.CTkFont(size=12),
             dropdown_font=ctk.CTkFont(size=11),
@@ -584,7 +595,7 @@ class JapaneseTutorApp(ctk.CTk):
         self.lang_cb = ctk.CTkComboBox(
             pad,
             values=lang_names,
-            width=145,
+            width=130,
             command=self._on_input_lang_changed,
             font=ctk.CTkFont(size=12),
             state="readonly")
@@ -592,7 +603,7 @@ class JapaneseTutorApp(ctk.CTk):
         self.lang_cb.grid(row=1, column=col, sticky="w", padx=(0, 12))
         col += 1
 
-        ctk.CTkFrame(pad, fg_color="transparent").grid(row=1, column=col, sticky="ew")
+        # Spacer column to push right-side elements to edge
         col += 1
 
         ctk.CTkLabel(pad, text="📚 Level:", font=ctk.CTkFont(size=13, weight="bold")).grid(row=1, column=col, sticky="e", padx=(0, 6))
@@ -600,7 +611,7 @@ class JapaneseTutorApp(ctk.CTk):
         self.lvl_cb = ctk.CTkComboBox(
             pad,
             values=config.JLPT_LEVELS,
-            width=120,
+            width=110,
             command=self._on_level_changed,
             font=ctk.CTkFont(size=12),
             state="readonly")
@@ -613,7 +624,9 @@ class JapaneseTutorApp(ctk.CTk):
         ctk.CTkButton(pad, text="🗑", width=36, height=30, font=ctk.CTkFont(size=14), fg_color=Colors.CLEAR_BTN, hover_color=Colors.CLEAR_BTN_HOVER, command=self._clear_chat).grid(row=1, column=col, sticky="e")
 
         # row 2: separator
-        ctk.CTkFrame(pad, height=1, fg_color="#1c1c3a").grid(row=2, column=0, columnspan=col + 1, sticky="ew", pady=(10, 8))
+        sep1 = ctk.CTkFrame(pad, height=1, fg_color="#1c1c3a")
+        sep1.grid(row=2, column=0, columnspan=col + 1, sticky="ew", pady=(10, 8))
+        sep1.pack_propagate(False)
 
         # row 3: TTS controls
         tc = 0
@@ -636,7 +649,7 @@ class JapaneseTutorApp(ctk.CTk):
         self.voice_cb = ctk.CTkComboBox(
             pad,
             values=voice_names,
-            width=170,
+            width=160,
             command=self._on_voice_changed,
             font=ctk.CTkFont(size=11),
             state="readonly")
@@ -647,7 +660,7 @@ class JapaneseTutorApp(ctk.CTk):
         self.rate_cb = ctk.CTkComboBox(
             pad,
             values=rate_names,
-            width=105,
+            width=100,
             command=self._on_rate_changed,
             font=ctk.CTkFont(size=11),
             state="readonly")
@@ -655,7 +668,9 @@ class JapaneseTutorApp(ctk.CTk):
         self.rate_cb.grid(row=3, column=tc + 5, sticky="e")
 
         # row 4: separator
-        ctk.CTkFrame(pad, height=1, fg_color="#1c1c3a").grid(row=4, column=0, columnspan=col + 1, sticky="ew", pady=(10, 8))
+        sep2 = ctk.CTkFrame(pad, height=1, fg_color="#1c1c3a")
+        sep2.grid(row=4, column=0, columnspan=col + 1, sticky="ew", pady=(10, 8))
+        sep2.pack_propagate(False)
 
         # row 5: Japanese ratio slider
         ratio_row = ctk.CTkFrame(pad, fg_color="transparent")
@@ -682,6 +697,38 @@ class JapaneseTutorApp(ctk.CTk):
         self._ratio_hint.pack(side="left", padx=4)
         ctk.CTkLabel(ratio_row, text="100% JP", font=ctk.CTkFont(size=10), text_color=Colors.TEXT_SECONDARY).pack(side="left")
 
+    # ── tabview ──────────────────────────────────────────────────
+    def _build_tabview(self) -> None:
+        """Build the main tabview containing chat and session review tabs."""
+        self._tabview = ctk.CTkTabview(
+            self,
+            fg_color=Colors.BG_SECONDARY,
+            segmented_button_fg_color=Colors.BG_DARK,
+            segmented_button_selected_color=Colors.SEND_BTN,
+            segmented_button_selected_hover_color=Colors.SEND_BTN_HOVER,
+            segmented_button_unselected_color=Colors.BG_SECONDARY,
+            corner_radius=14,
+            border_width=1,
+            border_color=Colors.CHAT_BORDER,
+        )
+        # Use padx/pady to create consistent margins without causing overflow
+        self._tabview.grid(row=1, column=0, sticky="nsew", padx=20, pady=(4, 4))
+        
+        self._tabview.add("💬 Chat")
+        self._tabview.add("📖 Session Review")
+        self._tabview.add("📊 Vocabulary")
+
+        self._tabview.tab("💬 Chat").grid_columnconfigure(0, weight=1)
+        self._tabview.tab("💬 Chat").grid_rowconfigure(0, weight=1)
+        self._tabview.tab("📖 Session Review").grid_columnconfigure(0, weight=1)
+        self._tabview.tab("📖 Session Review").grid_rowconfigure(0, weight=1)
+        self._tabview.tab("📊 Vocabulary").grid_columnconfigure(0, weight=1)
+        self._tabview.tab("📊 Vocabulary").grid_rowconfigure(0, weight=1)
+
+        self._build_chat_area()
+        self._build_session_review_tab()
+        self._build_vocab_tab()
+
     # ── chat area ───────────────────────────────────────────────
     def _build_chat_area(self) -> None:
         parent = self._tabview.tab("💬 Chat")
@@ -691,7 +738,7 @@ class JapaneseTutorApp(ctk.CTk):
             corner_radius=0,
             scrollbar_button_color="#252548",
             scrollbar_button_hover_color="#38386a")
-        self.chat_scroll.grid(row=0, column=0, sticky="nsew")
+        self.chat_scroll.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         self.chat_scroll.grid_columnconfigure(0, weight=1)
 
         self._bubble(
@@ -712,7 +759,7 @@ class JapaneseTutorApp(ctk.CTk):
     def _build_session_review_tab(self) -> None:
         parent = self._tabview.tab("📖 Session Review")
         top = ctk.CTkFrame(parent, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="nsew")
+        top.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         top.grid_columnconfigure(0, weight=1)
         top.grid_rowconfigure(1, weight=1)
 
@@ -812,7 +859,7 @@ class JapaneseTutorApp(ctk.CTk):
     def _build_vocab_tab(self) -> None:
         parent = self._tabview.tab("📊 Vocabulary")
         top = ctk.CTkFrame(parent, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="nsew")
+        top.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         top.grid_columnconfigure(0, weight=1)
         top.grid_rowconfigure(1, weight=1)
 
@@ -841,6 +888,7 @@ class JapaneseTutorApp(ctk.CTk):
         self._vocab_scroll.grid_columnconfigure(1, weight=1)
         self._vocab_scroll.grid_columnconfigure(2, weight=0)
         self._vocab_scroll.grid_columnconfigure(3, weight=0)
+        self._vocab_scroll.grid_columnconfigure(4, weight=0)
         self._refresh_vocab_tab()
 
     def _refresh_vocab_tab(self) -> None:
@@ -998,16 +1046,17 @@ class JapaneseTutorApp(ctk.CTk):
         is_user = role == "user"
         container = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         container.pack(fill="x", padx=4, pady=5)
+        container.grid_columnconfigure(0, weight=1)
         fg = Colors.USER_BUBBLE if is_user else Colors.ASSISTANT_BUBBLE
         bc = Colors.USER_BORDER if is_user else Colors.ASSISTANT_BORDER
         bubble = ctk.CTkFrame(container, fg_color=fg, corner_radius=16, border_width=1, border_color=bc)
-        side = "right" if is_user else "left"
-        final_px = (90, 4) if is_user else (4, 90)
+        
+        # Position bubble using grid within container for proper alignment
         if is_user:
-            start_px = (final_px[0], final_px[1] + 48)
+            bubble.grid(row=0, column=0, sticky="e", padx=(0, 4), pady=0)
         else:
-            start_px = (final_px[0] + 48, final_px[1])
-        bubble.pack(side=side, padx=start_px)
+            bubble.grid(row=0, column=0, sticky="w", padx=(4, 0), pady=0)
+        
         tag = "You 🗣" if is_user else "Sensei 🎓"
         tag_clr = Colors.ACCENT_GREEN if is_user else Colors.ACCENT_GOLD
         ctk.CTkLabel(bubble, text=tag, font=ctk.CTkFont(size=11, weight="bold"), text_color=tag_clr).pack(anchor="w", padx=14, pady=(10, 0))
@@ -1016,21 +1065,7 @@ class JapaneseTutorApp(ctk.CTk):
         if not is_user and (speakable or translatable):
             self._attach_action_buttons(bubble, text, speakable, translatable)
 
-        # Animate the bubble sliding into place
-        self._animate_bubble(bubble, start_px, final_px)
-
-    def _animate_bubble(self, bubble: ctk.CTkFrame, start_px: tuple[int, int], final_px: tuple[int, int], step: int = 0, steps: int = 8) -> None:
-        if not bubble.winfo_exists():
-            return
-        t = min(1.0, step / steps)
-        cur_left = int(start_px[0] + (final_px[0] - start_px[0]) * t)
-        cur_right = int(start_px[1] + (final_px[1] - start_px[1]) * t)
-        bubble.pack_configure(padx=(cur_left, cur_right))
-        if step < steps:
-            self.after(18, lambda: self._animate_bubble(bubble, start_px, final_px, step + 1, steps))
-        else:
-            bubble.pack_configure(padx=final_px)
-            self._smooth_scroll_bottom()
+        self._scroll_bottom()
 
     def _attach_action_buttons(
         self,
@@ -1157,8 +1192,9 @@ class JapaneseTutorApp(ctk.CTk):
     def _typing_indicator(self) -> ctk.CTkFrame:
         ctr = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         ctr.pack(fill="x", padx=4, pady=5)
+        ctr.grid_columnconfigure(0, weight=1)
         bub = ctk.CTkFrame(ctr, fg_color=Colors.ASSISTANT_BUBBLE, corner_radius=16, border_width=1, border_color=Colors.ASSISTANT_BORDER)
-        bub.pack(side="left", padx=(4, 90))
+        bub.grid(row=0, column=0, sticky="w", padx=(4, 0), pady=0)
         ctk.CTkLabel(bub, text="Sensei 🎓", font=ctk.CTkFont(size=11, weight="bold"), text_color=Colors.ACCENT_GOLD).pack(anchor="w", padx=14, pady=(10, 0))
         lbl = ctk.CTkLabel(bub, text="💭 Thinking", font=ctk.CTkFont(size=14), text_color=Colors.TEXT_SECONDARY)
         lbl.pack(anchor="w", padx=14, pady=(4, 12))
@@ -1554,6 +1590,7 @@ class JapaneseTutorApp(ctk.CTk):
         """Display a small informational pill below the last bubble."""
         ctr = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         ctr.pack(fill="x", padx=4, pady=(0, 4))
+        ctr.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             ctr,
             text=text,
@@ -1561,7 +1598,7 @@ class JapaneseTutorApp(ctk.CTk):
             text_color=Colors.TEXT_SECONDARY,
             fg_color="#141428",
             corner_radius=6,
-        ).pack(side="left", padx=(8, 0), ipadx=8, ipady=3)
+        ).grid(row=0, column=0, sticky="w", padx=(8, 0), pady=0, ipadx=8, ipady=3)
         self.after(60, self._scroll_bottom)
 
     def _show_retry_hint(self, context: str = "") -> None:
@@ -1569,8 +1606,9 @@ class JapaneseTutorApp(ctk.CTk):
         msg = f"⚠ {context.capitalize()} failed — you can try again."
         ctr = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         ctr.pack(fill="x", padx=4, pady=3)
+        ctr.grid_columnconfigure(0, weight=1)
         retry_frame = ctk.CTkFrame(ctr, fg_color="#2a0a0a", corner_radius=10, border_width=1, border_color="#5a1a1a")
-        retry_frame.pack(side="left", padx=(4, 90))
+        retry_frame.grid(row=0, column=0, sticky="w", padx=(4, 0), pady=0)
         ctk.CTkLabel(retry_frame, text=msg, font=ctk.CTkFont(size=12), text_color=Colors.ACCENT_RED).pack(padx=12, pady=(8, 4))
 
         def _retry() -> None:
@@ -1578,7 +1616,7 @@ class JapaneseTutorApp(ctk.CTk):
             ctr.destroy()
             self._status("🔄 Ready to try again — speak or type.")
         ctk.CTkButton(retry_frame, text="🔄 Dismiss", width=90, height=26, font=ctk.CTkFont(size=11), fg_color=Colors.CLEAR_BTN, hover_color=Colors.CLEAR_BTN_HOVER, corner_radius=6, command=_retry).pack(padx=12, pady=(0, 8))
-        self._smooth_scroll_bottom()
+        self._scroll_bottom()
 
     def _reset_ptt(self) -> None:
         self._animate_button_colors(
@@ -1672,28 +1710,3 @@ class JapaneseTutorApp(ctk.CTk):
             if i < steps:
                 self.after(max(1, duration_ms // steps), lambda: _step(i + 1))
         _step()
-
-    def _smooth_scroll_bottom(self, duration_ms: int = 240, steps: int = 8) -> None:
-        try:
-            canvas = self.chat_scroll._parent_canvas
-            canvas.update_idletasks()
-            _, cur_end = canvas.yview()
-        except Exception:
-            self.after(60, self._scroll_bottom)
-            return
-        start = cur_end
-        end = 1.0
-        if start >= 0.995:
-            self.after(60, self._scroll_bottom)
-            return
-
-        def _s(i: int = 0) -> None:
-            t = min(1.0, i / steps)
-            val = start + (end - start) * t
-            try:
-                canvas.yview_moveto(val)
-            except Exception:
-                return
-            if i < steps:
-                self.after(max(1, duration_ms // steps), lambda: _s(i + 1))
-        _s()
