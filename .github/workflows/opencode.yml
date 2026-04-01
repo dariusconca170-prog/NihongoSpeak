@@ -2,7 +2,7 @@ name: M2.5-Agent-Deploy
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -12,19 +12,15 @@ jobs:
     env:
       MODEL_ID: "opencode/minimax-m2.5-free"
       API_BASE_URL: "https://api.opencode.ai/v1"
+      # ENSURE THIS SECRET IS SET IN YOUR REPO SETTINGS
       API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Agent Environment
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Install Dependencies
-        run: pip install openai>=2.0.0
+        run: pip install openai
 
       - name: Initialize M2.5 Architect
         run: |
@@ -38,20 +34,29 @@ jobs:
           )
           
           try:
+              # MiniMax M2.5 sometimes prefers lower max_tokens on free tier
               response = client.chat.completions.create(
                   model='${{ env.MODEL_ID }}',
                   messages=[
-                      {'role': 'system', 'content': 'You are the MiniMax-M2.5 Architect.'},
-                      {'role': 'user', 'content': 'Analyze the codebase and suggest optimizations.'}
+                      {'role': 'system', 'content': 'You are a senior dev.'},
+                      {'role': 'user', 'content': 'Write a hello world in Rust.'}
                   ],
-                  temperature=0.1
+                  temperature=0.1,
+                  max_tokens=500 
               )
-              # In OpenAI v2+, response is an object, not a dict
-              print(response.choices[0].message.content)
+              
+              # THE FIX: Validate the response type before accessing attributes
+              if isinstance(response, str):
+                  print(f'CRITICAL: API returned a raw string instead of an object: {response}')
+                  sys.exit(1)
+              
+              if hasattr(response, 'choices') and response.choices:
+                  print(response.choices[0].message.content)
+              else:
+                  print(f'Unexpected response structure: {response}')
+                  sys.exit(1)
+
           except Exception as e:
-              print(f'API Error: {e}')
+              print(f'SDK Error: {e}')
               sys.exit(1)
           "
-
-      - name: Log Execution
-        run: echo "Deployment of ${{ env.env.MODEL_ID }} complete."
