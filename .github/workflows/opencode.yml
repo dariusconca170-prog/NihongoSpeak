@@ -26,13 +26,20 @@ jobs:
 
       - name: Extract Instruction from Comment
         id: extract
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            INSTRUCTION=$(echo '${{ github.event.comment.body }}' | sed 's|^/oc ||')
+            # Use env var to avoid shell quoting issues with special characters
+            INSTRUCTION="${COMMENT_BODY#/oc }"
           else
             INSTRUCTION="Write a production Hello World in Rust."
           fi
-          echo "instruction=$INSTRUCTION" >> $GITHUB_OUTPUT
+          # Write to GITHUB_OUTPUT using heredoc to handle multiline/special chars
+          EOF_MARKER=$(openssl rand -hex 8)
+          echo "instruction<<${EOF_MARKER}" >> $GITHUB_OUTPUT
+          echo "${INSTRUCTION}" >> $GITHUB_OUTPUT
+          echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
 
       - name: Run M2.5 Agent
         env:
@@ -40,7 +47,7 @@ jobs:
           API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           INSTRUCTION: ${{ steps.extract.outputs.instruction }}
         run: |
-          cat > /tmp/run_agent.py << 'EOF'
+          cat > /tmp/run_agent.py << 'PYEOF'
           import openai, sys, os, re, json
           from pathlib import Path
 
@@ -154,7 +161,6 @@ jobs:
               with open('/tmp/agent_output.json', 'w') as f:
                   json.dump({"prose": output}, f)
           else:
-              # Normalize: accept both "path" and "file" as the path key
               normalized = []
               for item in parsed:
                   p = item.get('path') or item.get('file') or item.get('filename') or item.get('name')
@@ -168,7 +174,7 @@ jobs:
                   json.dump(normalized, f)
 
           print('Agent output saved.')
-          EOF
+          PYEOF
           python /tmp/run_agent.py
 
       - name: Write Agent Files
@@ -218,14 +224,14 @@ jobs:
             exit 0
           fi
 
-          git commit -m "agent: $INSTRUCTION"
+          git commit -m "agent: ${INSTRUCTION:0:72}"
           git push origin "$BRANCH"
 
           gh pr create \
-            --title "Agent: $INSTRUCTION" \
+            --title "Agent: ${INSTRUCTION:0:72}" \
             --body "Automated PR from M2.5 agent run #${{ github.run_number }}
 
-          **Instruction:** $INSTRUCTION
+          **Instruction:** ${INSTRUCTION}
 
           **Triggered by:** ${{ github.event.comment.html_url }}" \
             --base main \
