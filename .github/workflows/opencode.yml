@@ -5,7 +5,6 @@ on:
 
 jobs:
   opencode-fix:
-    # Only run if the comment starts with /opencode or /oc
     if: contains(github.event.comment.body, '/opencode') || contains(github.event.comment.body, '/oc')
     runs-on: ubuntu-latest
     permissions:
@@ -22,7 +21,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install OpenCode
         run: npm install -g opencode-ai
@@ -30,12 +29,11 @@ jobs:
       - name: Run OpenCode Agent
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+          # The CLI looks for this specific env variable name for the token
+          OPENCODE_TOKEN: ${{ secrets.OPENCODE_ZEN_API_KEY }}
         run: |
-          # Explicitly passing the token via the --token flag 
-          # and setting the model to the free MiniMax version
-          opencode run \
-            --token "${{ secrets.OPENCODE_ZEN_API_KEY }}" \
-            --model "zen/minimax-m2.5-free" \
-            --issue-number "${{ github.event.issue.number }}" \
-            --instruction "${{ github.event.comment.body }}"
+          # Clean the comment to remove the trigger word
+          INSTRUCTION=$(echo "${{ github.event.comment.body }}" | sed 's/\/oc //g; s/\/opencode //g')
+          
+          # Run the command using standard positional arguments
+          opencode run "$INSTRUCTION" --model "zen/minimax-m2.5-free"
