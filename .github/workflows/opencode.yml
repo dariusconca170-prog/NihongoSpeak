@@ -1,12 +1,21 @@
 name: M2.5-Agent-Deploy
 
 on:
-  push:
-    branches: [ main ]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   agent-execution:
+    # Only run when a comment starts with /oc
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.comment.body, '/oc')
     runs-on: ubuntu-latest
 
     steps:
@@ -16,18 +25,31 @@ jobs:
       - name: Install Dependencies
         run: pip install openai>=2.30.0
 
-      - name: Initialize M2.5 Architect
+      - name: Extract Instruction from Comment
+        id: extract
+        run: |
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            INSTRUCTION=$(echo '${{ github.event.comment.body }}' | sed 's|^/oc ||')
+          else
+            INSTRUCTION="Write a production Hello World in Rust."
+          fi
+          echo "instruction=$INSTRUCTION" >> $GITHUB_OUTPUT
+
+      - name: Run M2.5 Agent
         env:
           MODEL_ID: "minimax-m2.5-free"
           API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          INSTRUCTION: ${{ steps.extract.outputs.instruction }}
         run: |
           cat > run_agent.py << 'EOF'
-          import openai, sys, os
+          import openai, sys, os, json
 
           model_id = os.environ.get('MODEL_ID', 'NOT SET')
           api_key = os.environ.get('API_KEY', '')
+          instruction = os.environ.get('INSTRUCTION', '')
 
           print(f"Using model: {model_id}")
+          print(f"Instruction: {instruction}")
 
           if not api_key or len(api_key) < 10:
               print('CRITICAL: OPENCODE_API_KEY missing or invalid.')
@@ -42,13 +64,25 @@ jobs:
               response = client.chat.completions.create(
                   model=model_id,
                   messages=[
-                      {'role': 'system', 'content': 'You are a senior Rust architect.'},
-                      {'role': 'user', 'content': 'Write a production Hello World in Rust.'}
+                      {
+                          'role': 'system',
+                          'content': (
+                              'You are a senior software engineer. '
+                              'When asked to write or change code, respond with ONLY the file contents. '
+                              'Format your response as a JSON array like this:\n'
+                              '[{"path": "src/main.rs", "content": "...file content..."}]\n'
+                              'No explanation. No markdown. Only valid JSON.'
+                          )
+                      },
+                      {'role': 'user', 'content': instruction}
                   ],
                   temperature=0.8
               )
               if hasattr(response, 'choices') and response.choices:
-                  print(response.choices[0].message.content)
+                  output = response.choices[0].message.content
+                  with open('agent_output.json', 'w') as f:
+                      f.write(output)
+                  print('Agent output saved.')
               else:
                   print(f'Gateway Error: {response}')
                   sys.exit(1)
@@ -57,3 +91,65 @@ jobs:
               sys.exit(1)
           EOF
           python run_agent.py
+
+      - name: Write Agent Files
+        run: |
+          python3 << 'EOF'
+          import json, os, sys
+
+          if not os.path.exists('agent_output.json'):
+              print('No agent output found.')
+              sys.exit(0)
+
+          with open('agent_output.json') as f:
+              raw = f.read().strip()
+
+          try:
+              files = json.loads(raw)
+              if not isinstance(files, list):
+                  print('Agent returned prose, not a file list. Saving as agent_response.md.')
+                  with open('agent_response.md', 'w') as f:
+                      f.write(raw)
+              else:
+                  for item in files:
+                      path = item['path']
+                      content = item['content']
+                      os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+                      with open(path, 'w') as f:
+                          f.write(content)
+                      print(f'Wrote: {path}')
+          except json.JSONDecodeError:
+              print('Could not parse JSON. Saving raw response as agent_response.md.')
+              with open('agent_response.md', 'w') as f:
+                  f.write(raw)
+          EOF
+
+      - name: Create Branch and Open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INSTRUCTION: ${{ steps.extract.outputs.instruction }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="agent/run-${{ github.run_number }}"
+          git checkout -b "$BRANCH"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "agent: $INSTRUCTION"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "Agent: $INSTRUCTION" \
+            --body "Automated PR from M2.5 agent run #${{ github.run_number }}
+
+          **Instruction:** $INSTRUCTION
+
+          **Triggered by:** ${{ github.event.comment.html_url }}" \
+            --base main \
+            --head "$BRANCH"
