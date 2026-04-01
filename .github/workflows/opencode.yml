@@ -8,12 +8,10 @@ on:
 jobs:
   agent-execution:
     runs-on: ubuntu-latest
-    
+
     env:
-      # THE FIX: Use the provider-prefixed ID for the 2026 Gateway
       MODEL_ID: "minimax/minimax-m2.5"
       API_BASE_URL: "https://gateway.opencode.ai/v1"
-      # Mapping your secret to the env variable
       API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
     steps:
@@ -24,42 +22,39 @@ jobs:
         run: pip install openai>=2.30.0
 
       - name: Initialize M2.5 Architect
+        env:
+          MODEL_ID: ${{ env.MODEL_ID }}
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           python -c "
-          import openai
-          import sys
-          import os
+          import openai, sys, os
 
-          api_key = os.environ.get('API_KEY')
+          api_key = os.environ['API_KEY']
           if not api_key or len(api_key) < 10:
-              print('CRITICAL: OPENCODE_API_KEY is missing or invalid in GitHub Secrets.')
+              print('CRITICAL: OPENCODE_API_KEY is missing or invalid.')
               sys.exit(1)
 
           client = openai.OpenAI(
-              api_key=api_key, 
-              base_url='${{ env.API_BASE_URL }}'
+              api_key=api_key,
+              base_url=os.environ['API_BASE_URL']
           )
-          
+
           try:
-              # MiniMax-M2.5 uses MoE (Mixture of Experts)
-              # It performs best at Temp 0.8+ to avoid 'Expert Collapse'
               response = client.chat.completions.create(
-                  model='${{ env.MODEL_ID }}',
+                  model=os.environ['MODEL_ID'],
                   messages=[
                       {'role': 'system', 'content': 'You are a senior Rust architect.'},
                       {'role': 'user', 'content': 'Write a production Hello World in Rust.'}
                   ],
                   temperature=0.8
               )
-              
               if hasattr(response, 'choices') and response.choices:
                   print(response.choices[0].message.content)
               else:
                   print(f'Gateway Error: {response}')
                   sys.exit(1)
-
           except Exception as e:
-              # This will now catch the 400 'Sonic' error if the key is still wrong
               print(f'SDK Error: {e}')
               sys.exit(1)
           "
