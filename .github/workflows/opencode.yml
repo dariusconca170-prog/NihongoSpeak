@@ -18,7 +18,7 @@ jobs:
 
       - name: Initialize M2.5 Architect
         env:
-          MODEL_ID: "minimax-m2.5"
+          MODEL_ID: "minimax-m2.5-free"
           API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           cat > run_agent.py << 'EOF'
