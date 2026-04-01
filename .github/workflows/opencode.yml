@@ -19,7 +19,6 @@ jobs:
       - name: Initialize M2.5 Architect
         env:
           MODEL_ID: "minimax-m2.5"
-          API_BASE_URL: "https://gateway.opencode.ai/v1"
           API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           cat > run_agent.py << 'EOF'
@@ -27,16 +26,17 @@ jobs:
 
           model_id = os.environ.get('MODEL_ID', 'NOT SET')
           api_key = os.environ.get('API_KEY', '')
-          base_url = os.environ.get('API_BASE_URL', '')
 
           print(f"Using model: {model_id}")
-          print(f"Using base_url: {base_url}")
 
           if not api_key or len(api_key) < 10:
-              print('CRITICAL: OPENCODE_API_KEY is missing or invalid.')
+              print('CRITICAL: API_KEY missing or invalid.')
               sys.exit(1)
 
-          client = openai.OpenAI(api_key=api_key, base_url=base_url)
+          client = openai.OpenAI(
+              api_key=api_key,
+              base_url="https://opencode.ai/zen/v1"
+          )
 
           try:
               response = client.chat.completions.create(
