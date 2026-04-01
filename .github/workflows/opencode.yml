@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   agent-execution:
-    # Only run when a comment starts with /oc
     if: |
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.comment.body, '/oc')
@@ -23,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Dependencies
-        run: pip install openai>=2.30.0
+        run: pip install openai>=2.30.0 --quiet
 
       - name: Extract Instruction from Comment
         id: extract
@@ -41,8 +40,8 @@ jobs:
           API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           INSTRUCTION: ${{ steps.extract.outputs.instruction }}
         run: |
-          cat > run_agent.py << 'EOF'
-          import openai, sys, os, json
+          cat > /tmp/run_agent.py << 'EOF'
+          import openai, sys, os, re
 
           model_id = os.environ.get('MODEL_ID', 'NOT SET')
           api_key = os.environ.get('API_KEY', '')
@@ -68,10 +67,9 @@ jobs:
                           'role': 'system',
                           'content': (
                               'You are a senior software engineer. '
-                              'When asked to write or change code, respond with ONLY the file contents. '
-                              'Format your response as a JSON array like this:\n'
-                              '[{"path": "src/main.rs", "content": "...file content..."}]\n'
-                              'No explanation. No markdown. Only valid JSON.'
+                              'When asked to write or change code, respond with ONLY a JSON array. '
+                              'Format: [{"path": "src/file.py", "content": "...file content..."}]\n'
+                              'No explanation. No markdown. No code fences. Only raw valid JSON.'
                           )
                       },
                       {'role': 'user', 'content': instruction}
@@ -79,8 +77,12 @@ jobs:
                   temperature=0.8
               )
               if hasattr(response, 'choices') and response.choices:
-                  output = response.choices[0].message.content
-                  with open('agent_output.json', 'w') as f:
+                  output = response.choices[0].message.content.strip()
+                  # Strip markdown code fences if model ignored instructions
+                  output = re.sub(r'^```[a-z]*\n?', '', output)
+                  output = re.sub(r'\n?```$', '', output)
+                  output = output.strip()
+                  with open('/tmp/agent_output.json', 'w') as f:
                       f.write(output)
                   print('Agent output saved.')
               else:
@@ -90,36 +92,33 @@ jobs:
               print(f'SDK Error: {e}')
               sys.exit(1)
           EOF
-          python run_agent.py
+          python /tmp/run_agent.py
 
       - name: Write Agent Files
         run: |
           python3 << 'EOF'
           import json, os, sys
 
-          if not os.path.exists('agent_output.json'):
+          if not os.path.exists('/tmp/agent_output.json'):
               print('No agent output found.')
               sys.exit(0)
 
-          with open('agent_output.json') as f:
+          with open('/tmp/agent_output.json') as f:
               raw = f.read().strip()
 
           try:
               files = json.loads(raw)
               if not isinstance(files, list):
-                  print('Agent returned prose, not a file list. Saving as agent_response.md.')
-                  with open('agent_response.md', 'w') as f:
-                      f.write(raw)
-              else:
-                  for item in files:
-                      path = item['path']
-                      content = item['content']
-                      os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
-                      with open(path, 'w') as f:
-                          f.write(content)
-                      print(f'Wrote: {path}')
-          except json.JSONDecodeError:
-              print('Could not parse JSON. Saving raw response as agent_response.md.')
+                  raise ValueError('Not a list')
+              for item in files:
+                  path = item['path']
+                  content = item['content']
+                  os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+                  with open(path, 'w') as f:
+                      f.write(content)
+                  print(f'Wrote: {path}')
+          except (json.JSONDecodeError, ValueError, KeyError) as e:
+              print(f'Parse error: {e}. Saving raw response as agent_response.md.')
               with open('agent_response.md', 'w') as f:
                   f.write(raw)
           EOF
@@ -134,7 +133,10 @@ jobs:
 
           BRANCH="agent/run-${{ github.run_number }}"
           git checkout -b "$BRANCH"
-          git add -A
+
+          # Only stage actual source files, not temp/workflow artifacts
+          git add src/ agent_response.md 2>/dev/null || true
+          git add -u
 
           if git diff --cached --quiet; then
             echo "No changes to commit."
