@@ -41,7 +41,8 @@ jobs:
           INSTRUCTION: ${{ steps.extract.outputs.instruction }}
         run: |
           cat > /tmp/run_agent.py << 'EOF'
-          import openai, sys, os, re
+          import openai, sys, os, re, json
+          from pathlib import Path
 
           model_id = os.environ.get('MODEL_ID', 'NOT SET')
           api_key = os.environ.get('API_KEY', '')
@@ -54,6 +55,34 @@ jobs:
               print('CRITICAL: OPENCODE_API_KEY missing or invalid.')
               sys.exit(1)
 
+          # Read all source files from the repo to give the model full context
+          repo_context = []
+          extensions = {'.py', '.rs', '.ts', '.tsx', '.js', '.jsx', '.go', '.toml', '.json', '.yaml', '.yml', '.md'}
+          ignore_dirs = {'.git', 'node_modules', '__pycache__', '.venv', 'target', 'dist', 'build'}
+
+          for path in sorted(Path('.').rglob('*')):
+              if path.is_file() and path.suffix in extensions:
+                  if any(part in ignore_dirs for part in path.parts):
+                      continue
+                  try:
+                      content = path.read_text(encoding='utf-8')
+                      repo_context.append(f'### FILE: {path}\n{content}')
+                  except Exception:
+                      pass
+
+          context_block = '\n\n'.join(repo_context) if repo_context else '(no source files found)'
+
+          system_prompt = (
+              'You are a senior software engineer working on an existing codebase.\n'
+              'The current repository files are provided below.\n'
+              'When asked to fix or change code, return ONLY the files that need to change.\n'
+              'Return a raw JSON array with no markdown, no code fences, no explanation:\n'
+              '[{"path": "src/file.py", "content": "...complete corrected file content..."}]\n'
+              'Return the COMPLETE file content for each changed file, not just the changed lines.\n'
+              'Only include files that actually need changes.\n\n'
+              f'CURRENT REPOSITORY FILES:\n\n{context_block}'
+          )
+
           client = openai.OpenAI(
               api_key=api_key,
               base_url="https://opencode.ai/zen/v1"
@@ -63,18 +92,10 @@ jobs:
               response = client.chat.completions.create(
                   model=model_id,
                   messages=[
-                      {
-                          'role': 'system',
-                          'content': (
-                              'You are a senior software engineer. '
-                              'When asked to write or change code, respond with ONLY a JSON array. '
-                              'Format: [{"path": "src/file.py", "content": "...file content..."}]\n'
-                              'No explanation. No markdown. No code fences. Only raw valid JSON.'
-                          )
-                      },
+                      {'role': 'system', 'content': system_prompt},
                       {'role': 'user', 'content': instruction}
                   ],
-                  temperature=0.8
+                  temperature=0.3
               )
               if hasattr(response, 'choices') and response.choices:
                   output = response.choices[0].message.content.strip()
@@ -98,6 +119,7 @@ jobs:
         run: |
           python3 << 'EOF'
           import json, os, sys
+          from pathlib import Path
 
           if not os.path.exists('/tmp/agent_output.json'):
               print('No agent output found.')
@@ -111,11 +133,10 @@ jobs:
               if not isinstance(files, list):
                   raise ValueError('Not a list')
               for item in files:
-                  path = item['path']
+                  path = Path(item['path'])
                   content = item['content']
-                  os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
-                  with open(path, 'w') as f:
-                      f.write(content)
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_text(content, encoding='utf-8')
                   print(f'Wrote: {path}')
           except (json.JSONDecodeError, ValueError, KeyError) as e:
               print(f'Parse error: {e}. Saving raw response as agent_response.md.')
@@ -133,10 +154,7 @@ jobs:
 
           BRANCH="agent/run-${{ github.run_number }}"
           git checkout -b "$BRANCH"
-
-          # Only stage actual source files, not temp/workflow artifacts
-          git add src/ agent_response.md 2>/dev/null || true
-          git add -u
+          git add -A -- ':!run_agent.py' ':!agent_output.json' ':!=2.30.0'
 
           if git diff --cached --quiet; then
             echo "No changes to commit."
