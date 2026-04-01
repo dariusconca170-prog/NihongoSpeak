@@ -12,16 +12,15 @@ component MessageBubble inherits Rectangle {
     border-radius: 16px;
     border-width: 1px;
     border-color: is-user ? #3D3D3E : #2E2E4E;
-    padding-left: 14px;
-    padding-right: 14px;
-    padding-top: 10px;
-    padding-bottom: 10px;
     max-width: 460px;
     height: inner-layout.preferred-height + 20px;
 
     inner-layout := VerticalLayout {
         spacing: 4px;
-        padding: 0;
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
 
         Text {
             text: is-user ? "You 🗣" : "Sensei 🎓";
@@ -81,8 +80,8 @@ struct VocabData {
 
 export component MainWindow inherits Window {
     title: "日本語 Sensei — Japanese Language Tutor";
-    width: 1020px;
-    height: 850px;
+    preferred-width: 1020px;
+    preferred-height: 850px;
     min-width: 800px;
     min-height: 600px;
 
@@ -278,7 +277,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Tab bar (manual implementation since TabWidget/Tab don't exist in std-widgets)
+        // Tab bar
         Rectangle {
             background: #1a1a2e;
             height: 40px;
@@ -289,7 +288,6 @@ export component MainWindow inherits Window {
 
                 Rectangle {
                     background: current-tab == 0 ? accent-primary : transparent;
-                    border-radius: 0;
                     height: 40px;
                     horizontal-stretch: 1;
 
@@ -415,10 +413,10 @@ export component MainWindow inherits Window {
                                 font-size: 14px;
                                 horizontal-stretch: 1;
                                 text <=> input-text;
-                                accepted(text) => { 
+                                accepted(text) => {
                                     if text != "" {
-                                        send-message(text); 
-                                        input-text = ""; 
+                                        send-message(text);
+                                        input-text = "";
                                     }
                                 }
                             }
@@ -492,13 +490,13 @@ export component MainWindow inherits Window {
                             background: assistant-bubble;
                             border-radius: 10px;
                             height: sess-layout.preferred-height + 24px;
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            padding-top: 10px;
-                            padding-bottom: 10px;
 
                             sess-layout := VerticalLayout {
                                 spacing: 4px;
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                padding-top: 10px;
+                                padding-bottom: 10px;
 
                                 HorizontalLayout {
                                     spacing: 12px;
@@ -548,15 +546,12 @@ export component MainWindow inherits Window {
                 }
 
                 // Header
-                Rectangle {
+                HorizontalLayout {
                     height: 30px;
-                    HorizontalLayout {
-                        spacing: 4px;
-                        Text { text: "Word"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
-                        Text { text: "Reading"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
-                        Text { text: "Struggles"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
-                        Text { text: "Next Review"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
-                    }
+                    Text { text: "Word"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                    Text { text: "Reading"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                    Text { text: "Struggles"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                    Text { text: "Next Review"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
                 }
 
                 ScrollView {
@@ -570,11 +565,11 @@ export component MainWindow inherits Window {
                             background: word.is-due ? #1a1a10 : transparent;
                             border-radius: 4px;
                             height: 28px;
-                            padding-left: 4px;
-                            padding-right: 4px;
 
                             HorizontalLayout {
                                 spacing: 4px;
+                                padding-left: 4px;
+                                padding-right: 4px;
                                 Text {
                                     text: word.word;
                                     font-size: 12px;
