@@ -55,9 +55,8 @@ jobs:
               print('CRITICAL: OPENCODE_API_KEY missing or invalid.')
               sys.exit(1)
 
-          # Read all source files from the repo
           repo_context = []
-          extensions = {'.py', '.rs', '.ts', '.tsx', '.js', '.jsx', '.go', '.toml', '.json', '.yaml', '.yml', '.md'}
+          extensions = {'.py', '.rs', '.ts', '.tsx', '.js', '.jsx', '.go', '.toml', '.json', '.yaml', '.yml', '.md', '.slint'}
           ignore_dirs = {'.git', 'node_modules', '__pycache__', '.venv', 'target', 'dist', 'build'}
 
           for path in sorted(Path('.').rglob('*')):
@@ -78,8 +77,9 @@ jobs:
               'The current repository files are provided below.\n'
               'When asked to fix or change code, return ONLY the files that need to change.\n'
               'Return a raw JSON array with no markdown, no code fences, no explanation.\n'
-              'Format: [{"path": "src/file.py", "content": "...complete corrected file content..."}]\n'
-              'Return the COMPLETE file content for each changed file, not just the changed lines.\n'
+              'Each item MUST use exactly these two keys: "path" and "content".\n'
+              'Example: [{"path": "src/main.rs", "content": "fn main() {}"}]\n'
+              'Return the COMPLETE file content for each changed file.\n'
               'Only include files that actually need changes.\n\n'
               f'CURRENT REPOSITORY FILES:\n\n{context_block}'
           )
@@ -114,7 +114,6 @@ jobs:
                   return response.choices[0].message.content.strip()
               return None
 
-          # First attempt
           messages = [
               {'role': 'system', 'content': system_prompt},
               {'role': 'user', 'content': instruction}
@@ -130,7 +129,6 @@ jobs:
           output = clean(raw)
           parsed = try_parse(output)
 
-          # Retry if model returned prose instead of JSON
           if parsed is None:
               print("Attempt 1 returned prose. Retrying with stricter prompt...")
               messages.append({'role': 'assistant', 'content': raw})
@@ -138,13 +136,12 @@ jobs:
                   'role': 'user',
                   'content': (
                       'Your response was not valid JSON. '
-                      'You must respond with ONLY a raw JSON array and nothing else. '
+                      'Respond with ONLY a raw JSON array, nothing else. '
                       'No explanation, no markdown, no code fences. '
-                      'Start your response with [ and end with ].\n'
-                      'Example: [{"path": "src/file.py", "content": "print(\'hello\')"}]'
+                      'Each item must have exactly "path" and "content" keys. '
+                      'Start with [ and end with ].'
                   )
               })
-
               print("Attempt 2...")
               raw2 = call_model(messages)
               if raw2:
@@ -153,14 +150,22 @@ jobs:
                   parsed = try_parse(output)
 
           if parsed is None:
-              print("Both attempts failed to return valid JSON. Saving prose as agent_response.md.")
+              print("Both attempts failed. Saving prose as fallback.")
               with open('/tmp/agent_output.json', 'w') as f:
-                  # Save a special marker so the write step knows it's prose
                   json.dump({"prose": output}, f)
           else:
-              print(f"Parsed {len(parsed)} file(s) to write.")
+              # Normalize: accept both "path" and "file" as the path key
+              normalized = []
+              for item in parsed:
+                  p = item.get('path') or item.get('file') or item.get('filename') or item.get('name')
+                  c = item.get('content') or item.get('code') or item.get('text') or ''
+                  if p:
+                      normalized.append({'path': p, 'content': c})
+                  else:
+                      print(f"WARNING: Could not find path key in item: {list(item.keys())}")
+              print(f"Parsed {len(normalized)} file(s) to write.")
               with open('/tmp/agent_output.json', 'w') as f:
-                  json.dump(parsed, f)
+                  json.dump(normalized, f)
 
           print('Agent output saved.')
           EOF
@@ -179,7 +184,6 @@ jobs:
           with open('/tmp/agent_output.json') as f:
               data = json.load(f)
 
-          # Check if agent fell back to prose
           if isinstance(data, dict) and 'prose' in data:
               print('Agent returned prose. Saving as agent_response.md.')
               with open('agent_response.md', 'w') as f:
