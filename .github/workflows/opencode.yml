@@ -41,7 +41,7 @@ jobs:
           INSTRUCTION: ${{ steps.extract.outputs.instruction }}
         run: |
           cat > /tmp/run_agent.py << 'EOF'
-          import openai, sys, os, re, json
+          import openai, sys, os, re
           from pathlib import Path
 
           model_id = os.environ.get('MODEL_ID', 'NOT SET')
@@ -55,7 +55,7 @@ jobs:
               print('CRITICAL: OPENCODE_API_KEY missing or invalid.')
               sys.exit(1)
 
-          # Read all source files from the repo to give the model full context
+          # Read all source files from the repo
           repo_context = []
           extensions = {'.py', '.rs', '.ts', '.tsx', '.js', '.jsx', '.go', '.toml', '.json', '.yaml', '.yml', '.md'}
           ignore_dirs = {'.git', 'node_modules', '__pycache__', '.venv', 'target', 'dist', 'build'}
@@ -71,13 +71,14 @@ jobs:
                       pass
 
           context_block = '\n\n'.join(repo_context) if repo_context else '(no source files found)'
+          print(f"Loaded {len(repo_context)} files into context.")
 
           system_prompt = (
               'You are a senior software engineer working on an existing codebase.\n'
               'The current repository files are provided below.\n'
               'When asked to fix or change code, return ONLY the files that need to change.\n'
-              'Return a raw JSON array with no markdown, no code fences, no explanation:\n'
-              '[{"path": "src/file.py", "content": "...complete corrected file content..."}]\n'
+              'Return a raw JSON array with no markdown, no code fences, no explanation.\n'
+              'Format: [{"path": "src/file.py", "content": "...complete corrected file content..."}]\n'
               'Return the COMPLETE file content for each changed file, not just the changed lines.\n'
               'Only include files that actually need changes.\n\n'
               f'CURRENT REPOSITORY FILES:\n\n{context_block}'
@@ -99,7 +100,12 @@ jobs:
               )
               if hasattr(response, 'choices') and response.choices:
                   output = response.choices[0].message.content.strip()
-                  # Strip markdown code fences if model ignored instructions
+                  print(f"Raw model output ({len(output)} chars):")
+                  print(output[:500])  # Print first 500 chars for debugging
+                  if not output:
+                      print('ERROR: Model returned empty response.')
+                      sys.exit(1)
+                  # Strip markdown code fences if present
                   output = re.sub(r'^```[a-z]*\n?', '', output)
                   output = re.sub(r'\n?```$', '', output)
                   output = output.strip()
@@ -128,6 +134,10 @@ jobs:
           with open('/tmp/agent_output.json') as f:
               raw = f.read().strip()
 
+          if not raw:
+              print('Agent output file is empty.')
+              sys.exit(0)
+
           try:
               files = json.loads(raw)
               if not isinstance(files, list):
@@ -139,7 +149,8 @@ jobs:
                   path.write_text(content, encoding='utf-8')
                   print(f'Wrote: {path}')
           except (json.JSONDecodeError, ValueError, KeyError) as e:
-              print(f'Parse error: {e}. Saving raw response as agent_response.md.')
+              print(f'Parse error: {e}')
+              print(f'Raw output was: {raw[:300]}')
               with open('agent_response.md', 'w') as f:
                   f.write(raw)
           EOF
@@ -154,7 +165,11 @@ jobs:
 
           BRANCH="agent/run-${{ github.run_number }}"
           git checkout -b "$BRANCH"
-          git add -A -- ':!run_agent.py' ':!agent_output.json' ':!=2.30.0'
+
+          # Delete temp files so they never get committed
+          rm -f run_agent.py agent_output.json
+
+          git add -A
 
           if git diff --cached --quiet; then
             echo "No changes to commit."
