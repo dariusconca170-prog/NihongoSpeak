@@ -36,4 +36,4 @@ jobs:
           INSTRUCTION=$(echo "${{ github.event.comment.body }}" | sed 's/\/oc //g; s/\/opencode //g')
           
           # Run the command using standard positional arguments
-          opencode run "$INSTRUCTION" --model "zen/minimax-m2.5-free"
+          opencode run "$INSTRUCTION" --model "zen/minimax-m2.5"
