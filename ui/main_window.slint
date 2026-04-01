@@ -1,62 +1,82 @@
-import { StackView, ListView, HorizontalBox, VerticalBox, GridBox, LineEdit, Button, TextEdit, Label, Slider, ComboBox, ProgressIndicator, Switch, ScrollView, CheckBox, Tab, TabWidget, ProgressBar, Palette, Colors, StandardButton, Dialog, GroupBox } from "std-widgets.slint";
+import { ListView, HorizontalBox, VerticalBox, GridBox, LineEdit, Button, TextEdit, Slider, ComboBox, ScrollView, CheckBox, StandardButton, GroupBox, Palette } from "std-widgets.slint";
 
-component MessageBubble {
+component MessageBubble inherits Rectangle {
     in property <string> role;
     in property <string> content;
     in property <bool> is-user: role == "user";
-    
-    Rectangle {
-        background: is-user ? #2D2D2E : #1E1E2E;
-        border-radius: 16px;
-        border-width: 1px;
-        border-color: is-user ? #3D3D3E : #2E2E4E;
-        padding: 10px 14px;
-        max-width: 460px;
-    }
-    
-    VerticalLayout {
+
+    callback play-audio-requested(string);
+    callback translate-requested(string);
+
+    background: is-user ? #2D2D2E : #1E1E2E;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: is-user ? #3D3D3E : #2E2E4E;
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    max-width: 460px;
+    height: inner-layout.preferred-height + 20px;
+
+    inner-layout := VerticalLayout {
         spacing: 4px;
         padding: 0;
-        
-        Label {
+
+        Text {
             text: is-user ? "You 🗣" : "Sensei 🎓";
             font-size: 11px;
             font-weight: 700;
             color: is-user ? #81C784 : #FFD54F;
         }
-        
-        Label {
+
+        Text {
             text: content;
             font-size: 14px;
             color: #FFFFFF;
-            wrap: true;
-            horizontal-align: is-user ? right : left;
+            wrap: word-wrap;
+            horizontal-alignment: is-user ? right : left;
         }
-        
-        HorizontalLayout {
-            visible: !is-user;
+
+        if !is-user : HorizontalLayout {
             spacing: 8px;
             padding-top: 6px;
-            
+
             Button {
                 text: "🔊 Play";
-                font-size: 11px;
                 height: 26px;
-                background: #607D8B;
-                border-radius: 8px;
-                clicked => { root.play-audio(content); }
+                clicked => { play-audio-requested(content); }
             }
-            
+
             Button {
                 text: "🔄 Translate";
-                font-size: 11px;
                 height: 26px;
-                background: #607D8B;
-                border-radius: 8px;
-                clicked => { root.translate(content); }
+                clicked => { translate-requested(content); }
             }
         }
     }
+}
+
+struct MessageData {
+    role: string,
+    content: string,
+}
+
+struct SessionData {
+    id: string,
+    level: string,
+    started: string,
+    message-count: int,
+    preview: string,
+}
+
+struct VocabData {
+    word: string,
+    reading: string,
+    struggles: int,
+    next-review: string,
+    level: int,
+    is-due: bool,
 }
 
 export component MainWindow inherits Window {
@@ -65,8 +85,7 @@ export component MainWindow inherits Window {
     height: 850px;
     min-width: 800px;
     min-height: 600px;
-    resizable: true;
-    
+
     // Colors matching the original app
     property <color> bg-dark: #161618;
     property <color> bg-secondary: #0D0D0E;
@@ -76,21 +95,26 @@ export component MainWindow inherits Window {
     property <color> accent-red: #E57373;
     property <color> text-primary: #FFFFFF;
     property <color> text-secondary: #94A3B8;
-    property <color> send-btn: #2196F3;
+    property <color> send-btn-color: #2196F3;
     property <color> ptt-ready: #4CAF50;
     property <color> ptt-recording: #F44336;
     property <color> user-bubble: #2D2D2E;
     property <color> assistant-bubble: #1E1E2E;
-    
+
     // State
-    property <bool> is-recording: false;
-    property <bool> is-processing: false;
-    property <bool> tts-enabled: true;
-    property <string> status-text: "⏳ Initializing...";
-    property <string> current-level: "A0.1";
-    property <int> japanese-ratio: 70;
-    property <string> api-key: "";
-    
+    in-out property <bool> is-recording: false;
+    in-out property <bool> is-processing: false;
+    in-out property <bool> tts-enabled: true;
+    in-out property <string> status-text: "⏳ Initializing...";
+    in-out property <string> current-level: "A0.1";
+    in-out property <int> japanese-ratio: 70;
+    in-out property <string> api-key: "";
+    in-out property <[MessageData]> messages: [];
+    in-out property <[SessionData]> sessions: [];
+    in-out property <[VocabData]> vocab: [];
+    in-out property <int> current-tab: 0;
+    in-out property <string> input-text: "";
+
     // Callbacks
     callback send-message(string);
     callback start-recording();
@@ -106,295 +130,336 @@ export component MainWindow inherits Window {
     callback load-session(string);
     callback delete-session(string);
     callback refresh-vocab();
-    
-    // Internal callbacks
-    callback add-message(string, string);
-    callback clear-messages();
-    callback set-status(string);
-    callback show-translation(string, string);
-    callback update-sessions([{id: string, level: string, started: string, message_count: int, preview: string}]);
-    callback update-vocabulary([{word: string, reading: string, struggles: int, next_review: string, level: int, is_due: bool}]);
-    callback set-recording-state(bool);
-    
+
+    background: bg-dark;
+
     VerticalLayout {
         spacing: 0;
         padding: 0;
-        
+
         // Header
         Rectangle {
             background: bg-secondary;
             height: 160px;
-            
+
             VerticalLayout {
                 spacing: 8px;
-                padding: 16px 22px;
-                
+                padding-left: 22px;
+                padding-right: 22px;
+                padding-top: 16px;
+                padding-bottom: 16px;
+
                 // Title
                 HorizontalLayout {
-                    spacing: 0;
-                    
-                    Label {
+                    spacing: 4px;
+                    alignment: start;
+
+                    Text {
                         text: "日本語";
                         font-size: 32px;
                         font-weight: 700;
                         color: accent-red;
+                        vertical-alignment: center;
                     }
-                    Label {
+                    Text {
                         text: " Sensei";
                         font-size: 32px;
                         font-weight: 700;
                         color: text-primary;
+                        vertical-alignment: center;
                     }
-                    Label {
+                    Text {
                         text: " 🎌 Immersive Japanese Tutor";
                         font-size: 13px;
                         color: text-secondary;
+                        vertical-alignment: center;
                     }
                 }
-                
+
                 // Controls row
                 HorizontalLayout {
                     spacing: 12px;
-                    VerticalLayout {
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Label { text: "🎙 Mic:"; font-size: 13px; font-weight: 700; color: text-primary; }
-                            ComboBox {
-                                width: 200px;
-                                model: ["Default Microphone", "Built-in Microphone"];
-                            }
+                    alignment: start;
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: "🎙 Mic:"; font-size: 13px; font-weight: 700; color: text-primary; vertical-alignment: center; }
+                        ComboBox {
+                            width: 200px;
+                            model: ["Default Microphone", "Built-in Microphone"];
                         }
                     }
-                    
-                    VerticalLayout {
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Label { text: "🗣 Speak:"; font-size: 13px; font-weight: 700; color: text-primary; }
-                            ComboBox {
-                                width: 130px;
-                                model: ["🇯🇵 Japanese", "🇬🇧 English", "🌐 Auto"];
-                            }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: "🗣 Speak:"; font-size: 13px; font-weight: 700; color: text-primary; vertical-alignment: center; }
+                        ComboBox {
+                            width: 130px;
+                            model: ["🇯🇵 Japanese", "🇬🇧 English", "🌐 Auto"];
                         }
                     }
-                    
-                    VerticalLayout {
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Label { text: "📚 Level:"; font-size: 13px; font-weight: 700; color: text-primary; }
-                            ComboBox {
-                                width: 110px;
-                                model: ["A0.1", "A0.2", "A0.3", "Beginner", "Elementary", "N5", "N4", "N3", "N2", "N1", "Any Level"];
-                                selected => { change-level(self.selected); }
-                            }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: "📚 Level:"; font-size: 13px; font-weight: 700; color: text-primary; vertical-alignment: center; }
+                        level-combo := ComboBox {
+                            width: 110px;
+                            model: ["A0.1", "A0.2", "A0.3", "Beginner", "Elementary", "N5", "N4", "N3", "N2", "N1", "Any Level"];
+                            selected => { change-level(self.current-value); }
                         }
                     }
-                    
+
                     Button {
                         text: "📂";
                         width: 36px;
                         height: 30px;
-                        background: #607D8B;
                         clicked => { load-sessions(); }
                     }
-                    
+
                     Button {
                         text: "🗑";
                         width: 36px;
                         height: 30px;
-                        background: #f44336;
                         clicked => { clear-chat(); }
                     }
                 }
-                
+
                 Rectangle { height: 1px; background: #1c1c3a; }
-                
+
                 // TTS and ratio controls
                 HorizontalLayout {
                     spacing: 20px;
-                    
+                    alignment: start;
+
                     HorizontalLayout {
                         spacing: 6px;
-                        Label { text: "🔊 Voice:"; font-size: 13px; font-weight: 700; color: text-primary; }
+                        Text { text: "🔊 Voice:"; font-size: 13px; font-weight: 700; color: text-primary; vertical-alignment: center; }
                         Button {
                             text: tts-enabled ? "🔊 ON" : "🔇 OFF";
                             width: 100px;
                             height: 30px;
-                            background: tts-enabled ? ptt-ready : #607D8B;
                             clicked => { toggle-tts(); }
                         }
                     }
-                    
+
                     ComboBox {
                         width: 160px;
                         model: ["Nanami 👩 (Female)", "Keita 👨 (Male)"];
                     }
-                    
+
                     ComboBox {
                         width: 100px;
                         model: ["Very Slow", "Slow", "Normal", "Fast", "Very Fast"];
                     }
-                    
+
                     Rectangle { width: 40px; }
-                    
+
                     HorizontalLayout {
                         spacing: 8px;
-                        Label { text: "🇯🇵 Japanese ratio:"; font-size: 12px; font-weight: 700; color: text-primary; }
-                        Label { 
-                            text: "70% JP / 30% EN"; 
-                            font-size: 12px; 
+                        Text { text: "🇯🇵 Japanese ratio:"; font-size: 12px; font-weight: 700; color: text-primary; vertical-alignment: center; }
+                        Text {
+                            text: japanese-ratio + "% JP / " + (100 - japanese-ratio) + "% EN";
+                            font-size: 12px;
                             color: accent-gold;
                             width: 130px;
+                            vertical-alignment: center;
                         }
                         Slider {
                             minimum: 50;
                             maximum: 100;
                             value: 70;
                             width: 200px;
-                            changed(v) => { change-ratio(v); }
+                            changed(v) => { root.japanese-ratio = round(v); change-ratio(round(v)); }
                         }
-                        Label { text: "50/50"; font-size: 10px; color: text-secondary; }
-                        Label { text: "100% JP"; font-size: 10px; color: text-secondary; }
+                        Text { text: "50/50"; font-size: 10px; color: text-secondary; vertical-alignment: center; }
+                        Text { text: "100% JP"; font-size: 10px; color: text-secondary; vertical-alignment: center; }
                     }
                 }
             }
         }
-        
-        // Tab Widget
-        TabWidget {
-            Tab {
-                title: "💬 Chat";
-                
-                VerticalLayout {
-                    spacing: 0;
-                    padding: 0;
-                    
-                    // Chat messages
-                    ScrollView {
-                        vertical-scrollbar-mode: auto;
-                        
-                        ListView {
-                            property <[{role: string, content: string}]> messages: [];
-                            spacing: 10px;
-                            padding: 10px;
-                            
-                            for msg in messages: MessageBubble {
-                                role: msg.role;
-                                content: msg.content;
-                            }
+
+        // Tab bar (manual implementation since TabWidget/Tab don't exist in std-widgets)
+        Rectangle {
+            background: #1a1a2e;
+            height: 40px;
+
+            HorizontalLayout {
+                spacing: 0;
+                padding: 0;
+
+                Rectangle {
+                    background: current-tab == 0 ? accent-primary : transparent;
+                    border-radius: 0;
+                    height: 40px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: "💬 Chat";
+                        font-size: 13px;
+                        font-weight: current-tab == 0 ? 700 : 400;
+                        color: current-tab == 0 ? text-primary : text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { current-tab = 0; }
+                    }
+                }
+
+                Rectangle {
+                    background: current-tab == 1 ? accent-primary : transparent;
+                    height: 40px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: "📖 Session Review";
+                        font-size: 13px;
+                        font-weight: current-tab == 1 ? 700 : 400;
+                        color: current-tab == 1 ? text-primary : text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { current-tab = 1; load-sessions(); }
+                    }
+                }
+
+                Rectangle {
+                    background: current-tab == 2 ? accent-primary : transparent;
+                    height: 40px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: "📊 Vocabulary";
+                        font-size: 13px;
+                        font-weight: current-tab == 2 ? 700 : 400;
+                        color: current-tab == 2 ? text-primary : text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { current-tab = 2; refresh-vocab(); }
+                    }
+                }
+
+                Rectangle {
+                    background: current-tab == 3 ? accent-primary : transparent;
+                    height: 40px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: "⚙️ Settings";
+                        font-size: 13px;
+                        font-weight: current-tab == 3 ? 700 : 400;
+                        color: current-tab == 3 ? text-primary : text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { current-tab = 3; }
+                    }
+                }
+            }
+        }
+
+        // Tab content area
+        Rectangle {
+            background: bg-dark;
+            vertical-stretch: 1;
+
+            // Chat Tab
+            if current-tab == 0 : VerticalLayout {
+                spacing: 0;
+                padding: 0;
+
+                // Chat messages
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: 10px;
+                        padding: 10px;
+                        alignment: start;
+
+                        for msg[i] in messages : MessageBubble {
+                            role: msg.role;
+                            content: msg.content;
+                            play-audio-requested(text) => { root.play-audio(text); }
+                            translate-requested(text) => { root.translate(text); }
                         }
                     }
-                    
-                    // Input area
-                    Rectangle {
-                        background: bg-secondary;
-                        height: 130px;
-                        padding: 8px 20px;
-                        
-                        VerticalLayout {
+                }
+
+                // Input area
+                Rectangle {
+                    background: bg-secondary;
+                    height: 130px;
+
+                    VerticalLayout {
+                        spacing: 8px;
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 8px;
+                        padding-bottom: 8px;
+
+                        HorizontalLayout {
                             spacing: 8px;
-                            
-                            HorizontalLayout {
-                                spacing: 8px;
-                                
-                                LineEdit {
-                                    placeholder-text: "✍ Type in Japanese or English...";
-                                    height: 44px;
-                                    font-size: 14px;
-                                    border-radius: 10px;
-                                    accepted(text) => { send-message(text); self.text = ""; }
-                                }
-                                
-                                Button {
-                                    text: "Send ➤";
-                                    width: 90px;
-                                    height: 44px;
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    background: send-btn;
-                                    border-radius: 10px;
-                                    clicked => { send-message(parent.parent.children[0].text); parent.parent.children[0].text = ""; }
+
+                            msg-input := LineEdit {
+                                placeholder-text: "✍ Type in Japanese or English...";
+                                height: 44px;
+                                font-size: 14px;
+                                horizontal-stretch: 1;
+                                text <=> input-text;
+                                accepted(text) => { 
+                                    if text != "" {
+                                        send-message(text); 
+                                        input-text = ""; 
+                                    }
                                 }
                             }
-                            
-                            // PTT Button
+
                             Button {
+                                text: "Send ➤";
+                                width: 90px;
+                                height: 44px;
+                                clicked => {
+                                    if input-text != "" {
+                                        send-message(input-text);
+                                        input-text = "";
+                                    }
+                                }
+                            }
+                        }
+
+                        // PTT Button
+                        ptt-btn := Rectangle {
+                            height: 60px;
+                            border-radius: 14px;
+                            border-width: 2px;
+                            border-color: is-recording ? #e57373 : #81C784;
+                            background: is-recording ? ptt-recording : ptt-ready;
+
+                            Text {
                                 text: is-recording ? "🔴 Recording..." : "🎤 Hold to Speak";
-                                height: 60px;
                                 font-size: 20px;
                                 font-weight: 700;
-                                background: is-recording ? ptt-recording : ptt-ready;
-                                border-radius: 14px;
-                                border-width: 2px;
-                                border-color: is-recording ? #e57373 : #81C784;
-                                
-                                pressed => { start-recording(); }
-                                released => { stop-recording(); }
+                                color: white;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
                             }
-                        }
-                    }
-                }
-            }
-            
-            Tab {
-                title: "📖 Session Review";
-                
-                VerticalLayout {
-                    spacing: 10px;
-                    padding: 10px;
-                    
-                    Label {
-                        text: "📖 Session Review";
-                        font-size: 16px;
-                        font-weight: 700;
-                        color: text-primary;
-                    }
-                    
-                    ScrollView {
-                        vertical-scrollbar-mode: auto;
-                        
-                        VerticalBox {
-                            property <[{id: string, level: string, started: string, message_count: int, preview: string}]> sessions: [];
-                            
-                            for sess in sessions: Rectangle {
-                                background: assistant-bubble;
-                                border-radius: 10px;
-                                padding: 10px 12px;
-                                
-                                VerticalLayout {
-                                    spacing: 4px;
-                                    
-                                    HorizontalLayout {
-                                        Label { text: "🗓 " + sess.started; font-size: 12px; font-weight: 700; color: text-primary; }
-                                        Label { text: "📚 " + sess.level; font-size: 11px; font-weight: 700; color: accent-gold; }
-                                        Label { text: "💬 " + sess.message_count + " msgs"; font-size: 11px; color: text-secondary; }
+
+                            TouchArea {
+                                pointer-event(event) => {
+                                    if event.kind == PointerEventKind.down {
+                                        start-recording();
                                     }
-                                    
-                                    Label { 
-                                        text: "\"" + sess.preview + "\""; 
-                                        font-size: 11px; 
-                                        color: text-secondary;
-                                        wrap: true;
-                                    }
-                                    
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        Button {
-                                            text: "▶ Load";
-                                            width: 80px;
-                                            height: 28px;
-                                            font-size: 11px;
-                                            font-weight: 700;
-                                            background: send-btn;
-                                            clicked => { load-session(sess.id); }
-                                        }
-                                        Button {
-                                            text: "🗑 Delete";
-                                            width: 80px;
-                                            height: 28px;
-                                            font-size: 11px;
-                                            background: accent-red;
-                                            clicked => { delete-session(sess.id); }
-                                        }
+                                    if event.kind == PointerEventKind.up {
+                                        stop-recording();
                                     }
                                 }
                             }
@@ -402,118 +467,193 @@ export component MainWindow inherits Window {
                     }
                 }
             }
-            
-            Tab {
-                title: "📊 Vocabulary";
-                
-                VerticalLayout {
-                    spacing: 10px;
-                    padding: 10px;
-                    
-                    Label {
-                        text: "📊 Tracked Vocabulary (Spaced Repetition)";
-                        font-size: 15px;
-                        font-weight: 700;
-                        color: text-primary;
-                    }
-                    
-                    ScrollView {
-                        vertical-scrollbar-mode: auto;
-                        
-                        VerticalBox {
-                            property <[{word: string, reading: string, struggles: int, next_review: string, level: int, is_due: bool}]> vocab: [];
-                            
-                            // Header
-                            HorizontalLayout {
-                                Label { text: "Word"; font-size: 11px; font-weight: 700; color: text-secondary; }
-                                Label { text: "Reading"; font-size: 11px; font-weight: 700; color: text-secondary; }
-                                Label { text: "Struggles"; font-size: 11px; font-weight: 700; color: text-secondary; }
-                                Label { text: "Next Review"; font-size: 11px; font-weight: 700; color: text-secondary; }
-                            }
-                            
-                            for word in vocab: Rectangle {
-                                background: word.is_due ? #1a1a10 : transparent;
-                                border-radius: 4px;
-                                padding: 4px;
-                                
+
+            // Session Review Tab
+            if current-tab == 1 : VerticalLayout {
+                spacing: 10px;
+                padding: 10px;
+
+                Text {
+                    text: "📖 Session Review";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: text-primary;
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: 8px;
+                        padding: 4px;
+                        alignment: start;
+
+                        for sess in sessions : Rectangle {
+                            background: assistant-bubble;
+                            border-radius: 10px;
+                            height: sess-layout.preferred-height + 24px;
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 10px;
+                            padding-bottom: 10px;
+
+                            sess-layout := VerticalLayout {
+                                spacing: 4px;
+
                                 HorizontalLayout {
-                                    Label { 
-                                        text: word.word; 
-                                        font-size: 12px; 
-                                        color: word.is_due ? accent-gold : text-primary; 
+                                    spacing: 12px;
+                                    Text { text: "🗓 " + sess.started; font-size: 12px; font-weight: 700; color: text-primary; }
+                                    Text { text: "📚 " + sess.level; font-size: 11px; font-weight: 700; color: accent-gold; }
+                                    Text { text: "💬 " + sess.message-count + " msgs"; font-size: 11px; color: text-secondary; }
+                                }
+
+                                Text {
+                                    text: "\"" + sess.preview + "\"";
+                                    font-size: 11px;
+                                    color: text-secondary;
+                                    wrap: word-wrap;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Button {
+                                        text: "▶ Load";
+                                        width: 80px;
+                                        height: 28px;
+                                        clicked => { load-session(sess.id); }
                                     }
-                                    Label { text: word.reading; font-size: 12px; color: text-secondary; }
-                                    Label { text: word.struggles; font-size: 12px; color: text-secondary; }
-                                    Label { text: word.next_review; font-size: 12px; color: text-secondary; }
+                                    Button {
+                                        text: "🗑 Delete";
+                                        width: 80px;
+                                        height: 28px;
+                                        clicked => { delete-session(sess.id); }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            
-            Tab {
-                title: "⚙️ Settings";
-                
-                VerticalLayout {
-                    spacing: 20px;
-                    padding: 20px;
-                    
-                    VerticalBox {
-                        spacing: 15px;
-                        
-                        Label { text: "🔑 Groq API Key"; font-size: 14px; font-weight: 700; color: text-primary; }
-                        
-                        LineEdit {
-                            placeholder-text: "gsk_...";
-                            password: true;
-                            height: 44px;
-                            font-size: 14px;
-                            accepted(text) => { save-api-key(text); }
-                        }
-                        
-                        Label { 
-                            text: "Get a free key → console.groq.com/keys"; 
-                            font-size: 11px; 
-                            color: accent-green; 
-                        }
-                        
-                        Rectangle { height: 1px; background: #1c1c3a; }
-                        
-                        Label { text: "🎛 Engine Settings"; font-size: 14px; font-weight: 700; color: text-primary; }
-                        
-                        Label { text: "Whisper Model: medium (configurable)"; font-size: 12px; color: text-secondary; }
-                        
-                        Label { text: "Transcription Language: Japanese"; font-size: 12px; color: text-secondary; }
-                        
-                        Label { text: "Device: auto (GPU if available)"; font-size: 12px; color: text-secondary; }
+
+            // Vocabulary Tab
+            if current-tab == 2 : VerticalLayout {
+                spacing: 10px;
+                padding: 10px;
+
+                Text {
+                    text: "📊 Tracked Vocabulary (Spaced Repetition)";
+                    font-size: 15px;
+                    font-weight: 700;
+                    color: text-primary;
+                }
+
+                // Header
+                Rectangle {
+                    height: 30px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "Word"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                        Text { text: "Reading"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                        Text { text: "Struggles"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
+                        Text { text: "Next Review"; font-size: 11px; font-weight: 700; color: text-secondary; horizontal-stretch: 1; }
                     }
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: 2px;
+                        alignment: start;
+
+                        for word in vocab : Rectangle {
+                            background: word.is-due ? #1a1a10 : transparent;
+                            border-radius: 4px;
+                            height: 28px;
+                            padding-left: 4px;
+                            padding-right: 4px;
+
+                            HorizontalLayout {
+                                spacing: 4px;
+                                Text {
+                                    text: word.word;
+                                    font-size: 12px;
+                                    color: word.is-due ? accent-gold : text-primary;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                Text { text: word.reading; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
+                                Text { text: word.struggles; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
+                                Text { text: word.next-review; font-size: 12px; color: text-secondary; horizontal-stretch: 1; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Settings Tab
+            if current-tab == 3 : VerticalLayout {
+                spacing: 20px;
+                padding: 20px;
+                alignment: start;
+
+                VerticalLayout {
+                    spacing: 15px;
+                    alignment: start;
+
+                    Text { text: "🔑 Groq API Key"; font-size: 14px; font-weight: 700; color: text-primary; }
+
+                    api-key-input := LineEdit {
+                        placeholder-text: "gsk_...";
+                        input-type: password;
+                        height: 44px;
+                        font-size: 14px;
+                        accepted(text) => { save-api-key(text); }
+                    }
+
+                    Text {
+                        text: "Get a free key → console.groq.com/keys";
+                        font-size: 11px;
+                        color: accent-green;
+                    }
+
+                    Rectangle { height: 1px; background: #1c1c3a; }
+
+                    Text { text: "🎛 Engine Settings"; font-size: 14px; font-weight: 700; color: text-primary; }
+
+                    Text { text: "Whisper Model: medium (configurable)"; font-size: 12px; color: text-secondary; }
+
+                    Text { text: "Transcription Language: Japanese"; font-size: 12px; color: text-secondary; }
+
+                    Text { text: "Device: auto (GPU if available)"; font-size: 12px; color: text-secondary; }
                 }
             }
         }
-        
+
         // Status bar
         Rectangle {
             background: #1a1a1a;
             height: 28px;
-            
+
             HorizontalLayout {
-                padding: 0 16px;
-                
-                Label {
+                padding-left: 16px;
+                padding-right: 16px;
+
+                Text {
                     text: status-text;
                     font-size: 11px;
                     color: text-secondary;
-                    horizontal-align: left;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
                 }
-                
-                Rectangle { width: 1px; }
-                
-                Label {
-                    text: "Whisper medium • LLM llama-3.3-70b • TTS VOICEVOX • 70/30 ratio";
+
+                Text {
+                    text: "Whisper medium • LLM llama-3.3-70b • TTS VOICEVOX • " + japanese-ratio + "/30 ratio";
                     font-size: 10px;
                     color: #444466;
-                    horizontal-align: right;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
                 }
             }
         }
