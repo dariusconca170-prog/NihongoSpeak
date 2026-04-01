@@ -30,10 +30,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_TOKEN: ${{ secrets.OPENCODE_ZEN_API_KEY }}
-          # Pass the model and message as env vars to prevent trailing char issues
-          OPENCODE_MODEL: "minimax-m2.5"
-          USER_PROMPT: ${{ github.event.comment.body }}
         run: |
-          # Use the environment variables directly in the command
-          # We place the message as a positional argument at the end
-          opencode run "$USER_PROMPT" --model "$OPENCODE_MODEL"
+          # This will list everything available so we can see the exact spelling
+          opencode models
