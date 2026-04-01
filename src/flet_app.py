@@ -267,7 +267,7 @@ class NihongoSenseiApp:
                             ft.Text(next_review, size=13, color=Colors.TEXT_SECONDARY, width=120),
                         ]),
                         padding=10,
-                        border=ft.border.only(bottom=1, color=Colors.BORDER_DEFAULT) if is_due else None
+                        border=ft.border.only(bottom=ft.BorderSide(1, Colors.BORDER_DEFAULT)) if is_due else None
                     )
                 )
 
