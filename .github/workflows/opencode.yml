@@ -10,10 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     
     env:
-      # THE FIX: Use the exact canonical ID for the Zen proxy
-      MODEL_ID: "minimax/minimax-m2.5"
-      # THE FIX: Use the 'Zen' Gateway URL
-      API_BASE_URL: "https://zen.opencode.ai/v1"
+      # EXACT string from your database migration list
+      MODEL_ID: "opencode/minimax-m2.5-free"
+      # The 2026 production endpoint
+      API_BASE_URL: "https://gateway.opencode.ai/v1"
+      # FIX: Link this to whatever your Secret is actually named in GitHub
+      # If your secret is named 'MY_SECRET', change it to ${{ secrets.MY_SECRET }}
       API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
     steps:
@@ -28,34 +30,36 @@ jobs:
           python -c "
           import openai
           import sys
+          import os
 
-          # OpenCode Zen requires the API key to be passed as a Bearer token
+          # Validation check for the key
+          api_key = os.environ.get('API_KEY')
+          if not api_key:
+              print('CRITICAL: API_KEY is empty. Check your GitHub Secrets name.')
+              sys.exit(1)
+
           client = openai.OpenAI(
-              api_key='${{ env.API_KEY }}', 
+              api_key=api_key, 
               base_url='${{ env.API_BASE_URL }}'
           )
           
           try:
-              # MiniMax-M2.5 performs best with a higher temperature (0.9+)
-              # and prefers the 'user' role for the initial instruction
               response = client.chat.completions.create(
                   model='${{ env.MODEL_ID }}',
                   messages=[
-                      {'role': 'system', 'content': 'You are a senior Rust architect. Plan the project structure first.'},
-                      {'role': 'user', 'content': 'Generate a production-ready Hello World in Rust.'}
+                      {'role': 'system', 'content': 'You are a senior Rust architect.'},
+                      {'role': 'user', 'content': 'Write a production Hello World in Rust.'}
                   ],
-                  temperature=1.0,
-                  top_p=0.95
+                  temperature=0.7 # Stable middle-ground for M2.5
               )
               
-              if response and response.choices:
+              if hasattr(response, 'choices') and response.choices:
                   print(response.choices[0].message.content)
               else:
-                  print(f'Empty response from gateway: {response}')
+                  print(f'Proxy returned non-standard response: {response}')
                   sys.exit(1)
 
           except Exception as e:
-              # This will catch 400/401/404 errors with details
               print(f'SDK Error: {e}')
               sys.exit(1)
           "
