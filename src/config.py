@@ -13,6 +13,7 @@ import os
 # enter at runtime through the in-app dialog.
 GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL: str = "llama-3.3-70b-versatile"
+CHAT_MODEL: str = GROQ_MODEL
 
 WHISPER_MODEL_SIZE: str = "large-v3"
 WHISPER_DEVICE: str = "auto"

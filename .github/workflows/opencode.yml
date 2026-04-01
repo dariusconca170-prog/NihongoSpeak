@@ -1,0 +1,38 @@
+name: OpenCode AI Agent (MiniMax)
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  opencode-fix:
+    if: contains(github.event.comment.body, '/opencode') || contains(github.event.comment.body, '/oc')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install OpenCode
+        run: npm install -g opencode-ai
+
+      - name: Run OpenCode Agent with MiniMax M2.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use your OpenCode Zen API Key here
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }} 
+        run: |
+          opencode run \
+            --model zen/minimax-m2.5-free \
+            --issue-number ${{ github.event.issue.number }} \
+            --instruction "${{ github.event.comment.body }}"

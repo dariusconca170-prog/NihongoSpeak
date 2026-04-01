@@ -143,11 +143,11 @@ class NihongoSenseiApp:
             border_radius=30,
             border_color=Colors.BORDER_DEFAULT,
             bgcolor=Colors.BG_INPUT,
-            color=Colors.TEXT_PRIMARY,
             text_size=15,
             content_padding=ft.padding.symmetric(horizontal=24, vertical=16),
             cursor_color=Colors.ACCENT_PRIMARY,
             focused_border_color=Colors.ACCENT_PRIMARY,
+            text_style=ft.TextStyle(color=Colors.TEXT_PRIMARY),
             prefix=ft.Container(
                 content=self.mic_btn_icon,
                 padding=ft.padding.only(left=8, right=4)
@@ -306,9 +306,9 @@ class NihongoSenseiApp:
             border_radius=10,
             border_color=Colors.BORDER_DEFAULT,
             bgcolor=Colors.BG_INPUT,
-            color=Colors.TEXT_PRIMARY,
             text_size=14,
             content_padding=ft.padding.all(14),
+            text_style=ft.TextStyle(color=Colors.TEXT_PRIMARY),
         )
 
         # Whisper Model Selection
@@ -318,8 +318,8 @@ class NihongoSenseiApp:
             border_radius=10,
             border_color=Colors.BORDER_DEFAULT,
             bgcolor=Colors.BG_INPUT,
-            color=Colors.TEXT_PRIMARY,
             width=200,
+            text_style=ft.TextStyle(color=Colors.TEXT_PRIMARY),
         )
         self.model_size_dropdown.on_change = self.handle_model_change
 
@@ -330,8 +330,8 @@ class NihongoSenseiApp:
             border_radius=10,
             border_color=Colors.BORDER_DEFAULT,
             bgcolor=Colors.BG_INPUT,
-            color=Colors.TEXT_PRIMARY,
             width=200,
+            text_style=ft.TextStyle(color=Colors.TEXT_PRIMARY),
         )
         self.transcription_lang_dropdown.on_change = self.handle_transcription_lang_change
 
