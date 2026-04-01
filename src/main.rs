@@ -3,23 +3,14 @@ use log::{error, info};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use slint::{Brush, Color, Image, PhysicalPosition, PhysicalSize, SharedString, VecModel};
-use std::collections::HashMap;
+use slint::{SharedString, ModelRc, VecModel};
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod audio;
-mod config;
-mod session;
-mod vocab;
-
-pub use audio::*;
-pub use config::*;
-pub use session::*;
-pub use vocab::*;
+slint::include_modules!();
 
 // ════════════════════════════════════════════════════════════════
 // GLOBAL STATE
@@ -121,7 +112,7 @@ fn ensure_directories() {
 
 fn send_to_groq(messages: Vec<ChatMessage>, api_key: &str) -> Result<(String, String)> {
     let client = reqwest::blocking::Client::new();
-    
+
     let mut chat_messages: Vec<serde_json::Value> = messages
         .iter()
         .take(20)
@@ -132,22 +123,22 @@ fn send_to_groq(messages: Vec<ChatMessage>, api_key: &str) -> Result<(String, St
             })
         })
         .collect();
-    
+
     let emotion_rule = r#"
 
-[EMOTION RULE]: Always start your response with one of the following 
-emotion tags, in this order of priority: [NORMAL], [EXCITED], [CHILL], [SURPRISED]. 
+[EMOTION RULE]: Always start your response with one of the following
+emotion tags, in this order of priority: [NORMAL], [EXCITED], [CHILL], [SURPRISED].
 Example: '[EXCITED] すごい！'
 "#;
-    
+
     let base_system = include_str!("../resources/system_prompt.txt");
     let system_content = format!("{}{}", base_system, emotion_rule);
-    
+
     chat_messages.insert(0, serde_json::json!({
         "role": "system",
         "content": system_content
     }));
-    
+
     let response = client
         .post("https://api.groq.com/openai/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", api_key))
@@ -158,13 +149,13 @@ Example: '[EXCITED] すごい！'
             "temperature": 0.8
         }))
         .send()?;
-    
+
     let data: serde_json::Value = response.json()?;
-    
+
     let raw_reply = data["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("すみません、エラーが発生しました。");
-    
+
     let emotion = if raw_reply.contains("[EXCITED]") {
         "EXCITED"
     } else if raw_reply.contains("[CHILL]") {
@@ -174,7 +165,7 @@ Example: '[EXCITED] すごい！'
     } else {
         "NORMAL"
     };
-    
+
     let clean_reply = raw_reply
         .replace("[NORMAL]", "")
         .replace("[EXCITED]", "")
@@ -182,15 +173,15 @@ Example: '[EXCITED] すごい！'
         .replace("[SURPRISED]", "")
         .trim()
         .to_string();
-    
+
     Ok((clean_reply, emotion.to_string()))
 }
 
 fn translate_text(text: &str, api_key: &str) -> Result<String> {
     let client = reqwest::blocking::Client::new();
-    
+
     let system_prompt = "You are a precise Japanese-to-English translator. Translate the following text into clear, natural English. Output ONLY the English translation — no labels, no original text, no commentary.";
-    
+
     let response = client
         .post("https://api.groq.com/openai/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", api_key))
@@ -204,126 +195,230 @@ fn translate_text(text: &str, api_key: &str) -> Result<String> {
             "temperature": 0.2
         }))
         .send()?;
-    
+
     let data: serde_json::Value = response.json()?;
-    
+
     let translation = data["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("(translation unavailable)");
-    
+
     Ok(translation.to_string())
+}
+
+// ════════════════════════════════════════════════════════════════
+// UI HELPER FUNCTIONS
+// ════════════════════════════════════════════════════════════════
+
+fn add_message_to_ui(app: &slint::Weak<MainWindow>, msg: &ChatMessage) {
+    let role = msg.role.clone();
+    let content = msg.content.clone();
+    let app = app.clone();
+
+    slint::invoke_from_event_loop(move || {
+        if let Some(window) = app.upgrade() {
+            let current_messages: Vec<MessageData> = window.get_messages().iter().collect();
+            let mut new_messages = current_messages;
+            new_messages.push(MessageData {
+                role: SharedString::from(&role),
+                content: SharedString::from(&content),
+            });
+            let model = ModelRc::new(VecModel::from(new_messages));
+            window.set_messages(model);
+        }
+    }).ok();
+}
+
+fn clear_messages_ui(window: &MainWindow) {
+    let empty: Vec<MessageData> = Vec::new();
+    let model = ModelRc::new(VecModel::from(empty));
+    window.set_messages(model);
+}
+
+fn set_status(app: &slint::Weak<MainWindow>, text: &str) {
+    let text = SharedString::from(text);
+    let app = app.clone();
+    slint::invoke_from_event_loop(move || {
+        if let Some(window) = app.upgrade() {
+            window.set_status_text(text);
+        }
+    }).ok();
+}
+
+fn set_status_sync(window: &MainWindow, text: &str) {
+    window.set_status_text(SharedString::from(text));
 }
 
 // ════════════════════════════════════════════════════════════════
 // SLINT MAIN
 // ════════════════════════════════════════════════════════════════
 
-slint::include_modules!();
-
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    
+
     info!("日本語 Sensei starting...");
     ensure_directories();
-    
+
     // Load API key from environment or config file
     let api_key = std::env::var("GROQ_API_KEY")
-        .or_else(|_| load_config_string("api_key"))
+        .ok()
+        .or_else(|| load_config_string("api_key"))
         .unwrap_or_default();
-    
+
     {
         let mut state = APP_STATE.write();
         state.api_key = api_key.clone();
     }
-    
+
     let app = MainWindow::new().expect("Failed to create main window");
-    
-    // Initialize UI with default values
-    app.set_title(SharedString::from("日本語 Sensei — Japanese Language Tutor"));
-    
+
     // Set up callbacks
-    let app_handle = app.as_weak();
-    
-    app.on_send_message(move |text| {
-        let app = app_handle.clone();
-        std::thread::spawn(move || {
-            handle_send_message(&app, text.to_string());
+    let app_weak = app.as_weak();
+
+    // ── Send message ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_send_message(move |text| {
+            let app = app_handle.clone();
+            let text = text.to_string();
+            std::thread::spawn(move || {
+                handle_send_message(&app, text);
+            });
         });
-    });
-    
-    app.on_start_recording(move || {
-        let app = app_handle.clone();
-        std::thread::spawn(move || {
-            handle_start_recording(&app);
+    }
+
+    // ── Start recording ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_start_recording(move || {
+            let app = app_handle.clone();
+            std::thread::spawn(move || {
+                handle_start_recording(&app);
+            });
         });
-    });
-    
-    app.on_stop_recording(move || {
-        let app = app_handle.clone();
-        std::thread::spawn(move || {
-            handle_stop_recording(&app);
+    }
+
+    // ── Stop recording ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_stop_recording(move || {
+            let app = app_handle.clone();
+            std::thread::spawn(move || {
+                handle_stop_recording(&app);
+            });
         });
-    });
-    
-    app.on_play_audio(move |text| {
-        let app = app_handle.clone();
-        std::thread::spawn(move || {
-            handle_play_audio(&app, text.to_string());
+    }
+
+    // ── Play audio ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_play_audio(move |text| {
+            let app = app_handle.clone();
+            let text = text.to_string();
+            std::thread::spawn(move || {
+                handle_play_audio(&app, text);
+            });
         });
-    });
-    
-    app.on_translate(move |text| {
-        let app = app_handle.clone();
-        std::thread::spawn(move || {
-            handle_translate(&app, text.to_string());
+    }
+
+    // ── Translate ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_translate(move |text| {
+            let app = app_handle.clone();
+            let text = text.to_string();
+            std::thread::spawn(move || {
+                handle_translate(&app, text);
+            });
         });
-    });
-    
-    app.on_clear_chat(move || {
-        let app = app_handle.clone();
-        clear_chat(&app);
-    });
-    
-    app.on_save_api_key(move |key| {
-        let app = app_handle.clone();
-        save_api_key(&app, key.to_string());
-    });
-    
-    app.on_change_level(move |level| {
-        let app = app_handle.clone();
-        change_level(&app, level.to_string());
-    });
-    
-    app.on_change_ratio(move |ratio| {
-        let mut state = APP_STATE.write();
-        state.japanese_ratio = ratio as i32;
-    });
-    
-    app.on_toggle_tts(move || {
-        let mut state = APP_STATE.write();
-        state.tts_enabled = !state.tts_enabled;
-    });
-    
-    app.on_load_sessions(move || {
-        let app = app_handle.clone();
-        load_sessions(&app);
-    });
-    
-    app.on_load_session(move |session_id| {
-        let app = app_handle.clone();
-        load_session(&app, session_id.to_string());
-    });
-    
-    app.on_delete_session(move |session_id| {
-        let app = app_handle.clone();
-        delete_session(&app, session_id.to_string());
-    });
-    
-    app.on_refresh_vocab(move || {
-        let app = app_handle.clone();
-        refresh_vocab(&app);
-    });
-    
+    }
+
+    // ── Clear chat ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_clear_chat(move || {
+            let app = app_handle.clone();
+            clear_chat(&app);
+        });
+    }
+
+    // ── Save API key ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_save_api_key(move |key| {
+            let app = app_handle.clone();
+            save_api_key(&app, key.to_string());
+        });
+    }
+
+    // ── Change level ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_change_level(move |level| {
+            let app = app_handle.clone();
+            change_level(&app, level.to_string());
+        });
+    }
+
+    // ── Change ratio ──
+    {
+        app.on_change_ratio(move |ratio| {
+            let mut state = APP_STATE.write();
+            state.japanese_ratio = ratio as i32;
+        });
+    }
+
+    // ── Toggle TTS ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_toggle_tts(move || {
+            let mut state = APP_STATE.write();
+            state.tts_enabled = !state.tts_enabled;
+            let enabled = state.tts_enabled;
+            let app = app_handle.clone();
+            slint::invoke_from_event_loop(move || {
+                if let Some(window) = app.upgrade() {
+                    window.set_tts_enabled(enabled);
+                }
+            }).ok();
+        });
+    }
+
+    // ── Load sessions ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_load_sessions(move || {
+            let app = app_handle.clone();
+            load_sessions_handler(&app);
+        });
+    }
+
+    // ── Load session ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_load_session(move |session_id| {
+            let app = app_handle.clone();
+            load_session_handler(&app, session_id.to_string());
+        });
+    }
+
+    // ── Delete session ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_delete_session(move |session_id| {
+            let app = app_handle.clone();
+            delete_session_handler(&app, session_id.to_string());
+        });
+    }
+
+    // ── Refresh vocab ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_refresh_vocab(move || {
+            let app = app_handle.clone();
+            refresh_vocab_handler(&app);
+        });
+    }
+
     // Welcome message
     let welcome = ChatMessage {
         role: "assistant".to_string(),
@@ -331,9 +426,9 @@ fn main() {
         timestamp: current_timestamp(),
         emotion: Some("NORMAL".to_string()),
     };
-    
-    add_message_to_ui(&app, &welcome);
-    
+
+    add_message_to_ui(&app_weak, &welcome);
+
     app.run().expect("Failed to run application");
 }
 
@@ -345,19 +440,17 @@ fn handle_send_message(app: &slint::Weak<MainWindow>, text: String) {
     if text.trim().is_empty() {
         return;
     }
-    
+
     let api_key = {
         let state = APP_STATE.read();
         state.api_key.clone()
     };
-    
+
     if api_key.is_empty() {
-        slint::invoke_from_event_loop(move || {
-            app.unwrap().set_status(SharedString::from("❌ Please set API key in settings"));
-        }).ok();
+        set_status(app, "❌ Please set API key in settings");
         return;
     }
-    
+
     // Add user message
     let user_msg = ChatMessage {
         role: "user".to_string(),
@@ -365,20 +458,17 @@ fn handle_send_message(app: &slint::Weak<MainWindow>, text: String) {
         timestamp: current_timestamp(),
         emotion: None,
     };
-    
+
     add_message_to_ui(app, &user_msg);
-    
-    slint::invoke_from_event_loop(move || {
-        app.unwrap().set_status(SharedString::from("💭 Sensei is thinking ..."));
-    }).ok();
-    
+    set_status(app, "💭 Sensei is thinking ...");
+
     // Get chat history
     let messages = {
         let mut state = APP_STATE.write();
         state.chat_history.push(user_msg.clone());
         state.chat_history.clone()
     };
-    
+
     // Send to Groq
     match send_to_groq(messages, &api_key) {
         Ok((reply, emotion)) => {
@@ -388,66 +478,64 @@ fn handle_send_message(app: &slint::Weak<MainWindow>, text: String) {
                 timestamp: current_timestamp(),
                 emotion: Some(emotion),
             };
-            
+
             // Update last expected Japanese for pronunciation scoring
             {
                 let mut state = APP_STATE.write();
                 state.last_expected_japanese = extract_japanese_words(&reply);
             }
-            
+
             // Save to history
             {
                 let mut state = APP_STATE.write();
                 state.chat_history.push(assistant_msg.clone());
             }
-            
+
             // Save session
             save_current_session();
-            
+
             add_message_to_ui(app, &assistant_msg);
-            
+
             // TTS if enabled
             let tts_enabled = {
                 let state = APP_STATE.read();
                 state.tts_enabled
             };
-            
+
             if tts_enabled {
-                slint::invoke_from_event_loop(move || {
-                    app.unwrap().set_status(SharedString::from("🔊 Speaking..."));
-                }).ok();
-                // TTS would be handled here via VOICEVOX or edge-tts
-            } else {
-                slint::invoke_from_event_loop(move || {
-                    app.unwrap().set_status(SharedString::from("✅ Ready"));
-                }).ok();
+                set_status(app, "🔊 Speaking...");
+                handle_play_audio(app, reply);
             }
+
+            set_status(app, "✅ Ready");
         }
         Err(e) => {
             error!("Groq API error: {}", e);
-            slint::invoke_from_event_loop(move || {
-                app.unwrap().set_status(SharedString::from(format!("❌ Error: {}", e)));
-            }).ok();
+            set_status(app, &format!("❌ Error: {}", e));
         }
     }
 }
 
 fn handle_start_recording(app: &slint::Weak<MainWindow>) {
     info!("Starting recording...");
-    
-    slint::invoke_from_event_loop(move || {
-        let window = app.unwrap();
-        window.set_recording_state(true);
-        window.set_status(SharedString::from("🔴 Recording..."));
-    }).ok();
-    
+
+    {
+        let app = app.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(window) = app.upgrade() {
+                window.set_is_recording(true);
+                window.set_status_text(SharedString::from("🔴 Recording..."));
+            }
+        }).ok();
+    }
+
     // Start audio recording using Python script
     let result = Command::new("python3")
         .args(&["-c", include_str!("../scripts/record_audio.py")])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
-    
+
     match result {
         Ok(_) => {
             let mut state = APP_STATE.write();
@@ -455,63 +543,54 @@ fn handle_start_recording(app: &slint::Weak<MainWindow>) {
         }
         Err(e) => {
             error!("Failed to start recording: {}", e);
-            slint::invoke_from_event_loop(move || {
-                app.unwrap().set_status(SharedString::from(format!("❌ Mic error: {}", e)));
-            }).ok();
+            set_status(app, &format!("❌ Mic error: {}", e));
         }
     }
 }
 
 fn handle_stop_recording(app: &slint::Weak<MainWindow>) {
     info!("Stopping recording...");
-    
-    slint::invoke_from_event_loop(move || {
-        let window = app.unwrap();
-        window.set_recording_state(false);
-        window.set_status(SharedString::from("⏳ Processing..."));
-    }).ok();
-    
-    let api_key = {
-        let state = APP_STATE.read();
-        state.api_key.clone()
-    };
-    
+
+    {
+        let app = app.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(window) = app.upgrade() {
+                window.set_is_recording(false);
+                window.set_status_text(SharedString::from("⏳ Processing..."));
+            }
+        }).ok();
+    }
+
     // Stop recording and get audio file
     let audio_result = Command::new("python3")
         .args(&["-c", include_str!("../scripts/stop_recording.py")])
         .output();
-    
+
     match audio_result {
         Ok(output) => {
             let audio_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            
+
             if audio_path.is_empty() || audio_path == "None" {
-                slint::invoke_from_event_loop(move || {
-                    app.unwrap().set_status(SharedString::from("⚠ Too short or silent"));
-                }).ok();
+                set_status(app, "⚠ Too short or silent");
                 return;
             }
-            
+
             // Transcribe with Whisper
             let (text, _lang) = match transcribe_audio(&audio_path) {
                 Ok(t) => t,
                 Err(e) => {
                     error!("Transcription failed: {}", e);
-                    slint::invoke_from_event_loop(move || {
-                        app.unwrap().set_status(SharedString::from(format!("❌ Transcription: {}", e)));
-                    }).ok();
+                    set_status(app, &format!("❌ Transcription: {}", e));
                     return;
                 }
             };
-            
+
             if text.is_empty() {
-                slint::invoke_from_event_loop(move || {
-                    app.unwrap().set_status(SharedString::from("⚠ Couldn't recognize speech"));
-                }).ok();
+                set_status(app, "⚠ Couldn't recognize speech");
                 return;
             }
-            
-            // Show user what was transcribed
+
+            // Show user what was transcribed then process
             let user_msg = ChatMessage {
                 role: "user".to_string(),
                 content: text.clone(),
@@ -519,22 +598,21 @@ fn handle_stop_recording(app: &slint::Weak<MainWindow>) {
                 emotion: None,
             };
             add_message_to_ui(app, &user_msg);
-            
+
             // Process with AI
             handle_send_message(app, text);
         }
         Err(e) => {
             error!("Failed to stop recording: {}", e);
-            slint::invoke_from_event_loop(move || {
-                app.unwrap().set_status(SharedString::from(format!("❌ Audio error: {}", e)));
-            }).ok();
+            set_status(app, &format!("❌ Audio error: {}", e));
         }
     }
 }
 
 fn transcribe_audio(audio_path: &str) -> Result<(String, String)> {
     // Use faster-whisper via Python
-    let script = format!(r#"
+    let script = format!(
+        r#"
 import sys
 import json
 from faster_whisper import WhisperModel
@@ -542,19 +620,21 @@ from faster_whisper import WhisperModel
 model_size = "medium"
 model = WhisperModel(model_size, device="auto", compute_type="default")
 
-segments, info = model.transcribe("{}", language="ja")
+segments, info = model.transcribe(r"{audio_path}", language="ja")
 text = "".join(s.text for s in segments)
 
 result = {{"text": text.strip(), "language": info.language}}
 print(json.dumps(result))
-"#);
-    
+"#,
+        audio_path = audio_path
+    );
+
     let output = Command::new("python3")
         .args(&["-c", &script])
         .output()?;
-    
+
     let data: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    
+
     Ok((
         data["text"].as_str().unwrap_or("").to_string(),
         data["language"].as_str().unwrap_or("ja").to_string(),
@@ -563,21 +643,22 @@ print(json.dumps(result))
 
 fn handle_play_audio(app: &slint::Weak<MainWindow>, text: String) {
     info!("Playing TTS for: {}", text);
-    
-    slint::invoke_from_event_loop(move || {
-        app.unwrap().set_status(SharedString::from("🔊 Speaking..."));
-    }).ok();
-    
-    // Use VOICEVOX or edge-tts
+
+    set_status(app, "🔊 Speaking...");
+
+    // Use edge-tts
     let (voice, rate) = {
         let state = APP_STATE.read();
         (state.tts_voice.clone(), state.tts_rate.clone())
     };
-    
-    let script = format!(r#"
+
+    let escaped_text = text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ");
+    let script = format!(
+        r#"
 import asyncio
 import edge_tts
 import os
+import tempfile
 
 async def main():
     rate_map = {{
@@ -587,41 +668,55 @@ async def main():
         "Fast": "+20%",
         "Very Fast": "+50%"
     }}
-    
+
     voice_map = {{
         "Nanami": "ja-JP-NanamiNeural",
         "Keita": "ja-JP-KeitaNeural"
     }}
-    
+
     communicate = edge_tts.Communicate(
-        "{}",
-        voice_map.get("{}", "ja-JP-NanamiNeural"),
-        rate=rate_map.get("{}", "+0%")
+        "{text}",
+        voice_map.get("{voice}", "ja-JP-NanamiNeural"),
+        rate=rate_map.get("{rate}", "+0%")
     )
-    
-    output_file = "/tmp/sensei_tts.mp3"
+
+    output_file = os.path.join(tempfile.gettempdir(), "sensei_tts.mp3")
     await communicate.save(output_file)
-    
-    # Play with pygame
-    import pygame
-    pygame.mixer.init()
-    pygame.mixer.music.load(output_file)
-    pygame.mixer.music.play()
-    while pygame.mixer.music.get_busy():
-        pygame.time.Clock().tick(10)
-    
-    os.remove(output_file)
+
+    try:
+        import pygame
+        pygame.mixer.init()
+        pygame.mixer.music.load(output_file)
+        pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():
+            pygame.time.Clock().tick(10)
+    except ImportError:
+        import subprocess
+        import sys
+        if sys.platform == 'win32':
+            subprocess.run(['powershell', '-c', f'(New-Object Media.SoundPlayer "{{}}")'.format(output_file) + '.PlaySync()'], capture_output=True)
+        elif sys.platform == 'darwin':
+            subprocess.run(['afplay', output_file], capture_output=True)
+        else:
+            subprocess.run(['aplay', output_file], capture_output=True)
+
+    try:
+        os.remove(output_file)
+    except:
+        pass
 
 asyncio.run(main())
-"#, text, voice, rate);
-    
-    Command::new("python3")
+"#,
+        text = escaped_text,
+        voice = voice,
+        rate = rate
+    );
+
+    let _ = Command::new("python3")
         .args(&["-c", &script])
-        .spawn();
-    
-    slint::invoke_from_event_loop(move || {
-        app.unwrap().set_status(SharedString::from("✅ Ready"));
-    }).ok();
+        .output();
+
+    set_status(app, "✅ Ready");
 }
 
 fn handle_translate(app: &slint::Weak<MainWindow>, text: String) {
@@ -629,82 +724,94 @@ fn handle_translate(app: &slint::Weak<MainWindow>, text: String) {
         let state = APP_STATE.read();
         state.api_key.clone()
     };
-    
+
     if api_key.is_empty() {
         return;
     }
-    
+
     match translate_text(&text, &api_key) {
         Ok(translation) => {
-            slint::invoke_from_event_loop(move || {
-                app.unwrap().show_translation(text.into(), translation.into());
-            }).ok();
+            // Show translation as a system message in chat
+            let translation_msg = ChatMessage {
+                role: "assistant".to_string(),
+                content: format!("📝 Translation:\n「{}」\n→ {}", text, translation),
+                timestamp: current_timestamp(),
+                emotion: Some("NORMAL".to_string()),
+            };
+            add_message_to_ui(app, &translation_msg);
         }
         Err(e) => {
             error!("Translation failed: {}", e);
+            set_status(app, &format!("❌ Translation failed: {}", e));
         }
     }
 }
 
 fn clear_chat(app: &slint::Weak<MainWindow>) {
-    let mut state = APP_STATE.write();
-    state.chat_history.clear();
-    
+    {
+        let mut state = APP_STATE.write();
+        state.chat_history.clear();
+    }
+
+    let app_clone = app.clone();
     slint::invoke_from_event_loop(move || {
-        let window = app.unwrap();
-        window.clear_messages();
-        window.set_status(SharedString::from("🌸 Chat cleared! Let's start fresh."));
+        if let Some(window) = app_clone.upgrade() {
+            clear_messages_ui(&window);
+            window.set_status_text(SharedString::from("🌸 Chat cleared! Let's start fresh."));
+        }
     }).ok();
-    
+
     let welcome = ChatMessage {
         role: "assistant".to_string(),
         content: "🌸 Chat cleared! Let's start fresh.\n新しい会話を始めましょう！ What shall we talk about?".to_string(),
         timestamp: current_timestamp(),
         emotion: Some("NORMAL".to_string()),
     };
-    
+
     add_message_to_ui(app, &welcome);
 }
 
 fn save_api_key(app: &slint::Weak<MainWindow>, key: String) {
-    let mut state = APP_STATE.write();
-    state.api_key = key.clone();
-    
+    {
+        let mut state = APP_STATE.write();
+        state.api_key = key.clone();
+    }
+
     // Save to config file
     let config_path = get_data_dir().join("config.json");
     let config = serde_json::json!({
         "api_key": key
     });
-    
+
     if let Err(e) = fs::write(&config_path, config.to_string()) {
         error!("Failed to save config: {}", e);
     }
-    
-    slint::invoke_from_event_loop(move || {
-        app.unwrap().set_status(SharedString::from("✅ Settings saved"));
-    }).ok();
+
+    set_status(app, "✅ Settings saved");
 }
 
 fn change_level(app: &slint::Weak<MainWindow>, level: String) {
-    let mut state = APP_STATE.write();
-    state.current_level = level.clone();
-    
+    {
+        let mut state = APP_STATE.write();
+        state.current_level = level.clone();
+    }
+
     let message = format!("📚 Level → **{}**\nI'll adapt my teaching to this level. 続けましょう！", level);
-    
+
     let msg = ChatMessage {
         role: "assistant".to_string(),
         content: message,
         timestamp: current_timestamp(),
         emotion: Some("NORMAL".to_string()),
     };
-    
+
     add_message_to_ui(app, &msg);
 }
 
-fn load_sessions(app: &slint::Weak<MainWindow>) {
+fn load_sessions_handler(app: &slint::Weak<MainWindow>) {
     let sessions_dir = get_sessions_dir();
     let mut sessions: Vec<SessionSummary> = Vec::new();
-    
+
     if let Ok(entries) = fs::read_dir(&sessions_dir) {
         for entry in entries.flatten() {
             if let Ok(content) = fs::read_to_string(entry.path()) {
@@ -712,7 +819,7 @@ fn load_sessions(app: &slint::Weak<MainWindow>) {
                     let started = data["started"].as_str().unwrap_or("").replace("T", " ");
                     let level = data["level"].as_str().unwrap_or("?");
                     let messages = data["messages"].as_array().map(|a| a.len()).unwrap_or(0);
-                    
+
                     let preview = data["messages"]
                         .as_array()
                         .and_then(|arr| arr.iter().find(|m| m["role"] == "user"))
@@ -721,7 +828,7 @@ fn load_sessions(app: &slint::Weak<MainWindow>) {
                         .chars()
                         .take(50)
                         .collect::<String>();
-                    
+
                     sessions.push(SessionSummary {
                         id: data["id"].as_str().unwrap_or("").to_string(),
                         level: level.to_string(),
@@ -733,22 +840,35 @@ fn load_sessions(app: &slint::Weak<MainWindow>) {
             }
         }
     }
-    
+
     sessions.sort_by(|a, b| b.started.cmp(&a.started));
-    
+
     {
         let mut state = APP_STATE.write();
         state.sessions = sessions.clone();
     }
-    
+
+    let app_clone = app.clone();
     slint::invoke_from_event_loop(move || {
-        app.unwrap().update_sessions(sessions.into());
+        if let Some(window) = app_clone.upgrade() {
+            let session_data: Vec<SessionData> = sessions.iter().map(|s| {
+                SessionData {
+                    id: SharedString::from(&s.id),
+                    level: SharedString::from(&s.level),
+                    started: SharedString::from(&s.started),
+                    message_count: s.message_count as i32,
+                    preview: SharedString::from(&s.preview),
+                }
+            }).collect();
+            let model = ModelRc::new(VecModel::from(session_data));
+            window.set_sessions(model);
+        }
     }).ok();
 }
 
-fn load_session(app: &slint::Weak<MainWindow>, session_id: String) {
+fn load_session_handler(app: &slint::Weak<MainWindow>, session_id: String) {
     let session_path = get_sessions_dir().join(format!("session_{}.json", session_id));
-    
+
     if let Ok(content) = fs::read_to_string(&session_path) {
         if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
             let messages: Vec<ChatMessage> = data["messages"]
@@ -764,61 +884,77 @@ fn load_session(app: &slint::Weak<MainWindow>, session_id: String) {
                         .collect()
                 })
                 .unwrap_or_default();
-            
+
             let level = data["level"].as_str().unwrap_or("A0.1").to_string();
             let started = data["started"].as_str().unwrap_or("").replace("T", " ");
-            
+
             {
                 let mut state = APP_STATE.write();
                 state.chat_history = messages.clone();
                 state.current_level = level.clone();
             }
-            
+
+            let app_clone = app.clone();
+            let msg_count = messages.len();
             slint::invoke_from_event_loop(move || {
-                let window = app.unwrap();
-                window.clear_messages();
-                
-                let msg = ChatMessage {
-                    role: "assistant".to_string(),
-                    content: format!("📂 Restored session from {} (Level: {}, {} messages)", started, level, messages.len()),
-                    timestamp: current_timestamp(),
-                    emotion: Some("NORMAL".to_string()),
-                };
-                add_message_to_ui(app, &msg);
-                
-                for m in messages {
-                    add_message_to_ui(app, &m);
+                if let Some(window) = app_clone.upgrade() {
+                    clear_messages_ui(&window);
+
+                    let header_msg = ChatMessage {
+                        role: "assistant".to_string(),
+                        content: format!("📂 Restored session from {} (Level: {}, {} messages)", started, level, msg_count),
+                        timestamp: current_timestamp(),
+                        emotion: Some("NORMAL".to_string()),
+                    };
+
+                    // Build all messages at once
+                    let mut all_messages: Vec<MessageData> = Vec::new();
+                    all_messages.push(MessageData {
+                        role: SharedString::from(&header_msg.role),
+                        content: SharedString::from(&header_msg.content),
+                    });
+                    for m in &messages {
+                        all_messages.push(MessageData {
+                            role: SharedString::from(&m.role),
+                            content: SharedString::from(&m.content),
+                        });
+                    }
+                    let model = ModelRc::new(VecModel::from(all_messages));
+                    window.set_messages(model);
+
+                    window.set_status_text(SharedString::from(format!("📂 Session loaded ({} messages)", msg_count)));
+                    window.set_current_tab(0);
                 }
-                
-                window.set_status(SharedString::from(format!("📂 Session loaded ({} messages)", messages.len())));
             }).ok();
         }
     }
 }
 
-fn delete_session(_app: &slint::Weak<MainWindow>, session_id: String) {
+fn delete_session_handler(app: &slint::Weak<MainWindow>, session_id: String) {
     let session_path = get_sessions_dir().join(format!("session_{}.json", session_id));
     fs::remove_file(session_path).ok();
+    // Refresh the session list
+    load_sessions_handler(app);
 }
 
-fn refresh_vocab(app: &slint::Weak<MainWindow>) {
+fn refresh_vocab_handler(app: &slint::Weak<MainWindow>) {
     let vocab_path = get_data_dir().join("vocab.json");
     let mut words: Vec<VocabWord> = Vec::new();
-    
+
     if let Ok(content) = fs::read_to_string(&vocab_path) {
         if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(obj) = data.as_object() {
+                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
                 for (word, entry) in obj {
                     let entry_obj = entry.as_object();
-                    let next_review = entry_obj.and_then(|e| e["next_review"].as_str()).unwrap_or("");
-                    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                    let is_due = next_review <= today;
-                    
+                    let next_review = entry_obj.and_then(|e| e["next_review"].as_str()).unwrap_or("").to_string();
+                    let is_due = next_review.as_str() <= today.as_str();
+
                     words.push(VocabWord {
                         word: word.clone(),
                         reading: entry_obj.and_then(|e| e["reading"].as_str()).unwrap_or("").to_string(),
                         struggles: entry_obj.and_then(|e| e["struggles"].as_i64()).unwrap_or(0) as i32,
-                        next_review: next_review.to_string(),
+                        next_review,
                         level: entry_obj.and_then(|e| e["level"].as_i64()).unwrap_or(0) as i32,
                         is_due,
                     });
@@ -826,16 +962,30 @@ fn refresh_vocab(app: &slint::Weak<MainWindow>) {
             }
         }
     }
-    
+
     words.sort_by(|a, b| b.struggles.cmp(&a.struggles));
-    
+
     {
         let mut state = APP_STATE.write();
         state.vocab_words = words.clone();
     }
-    
+
+    let app_clone = app.clone();
     slint::invoke_from_event_loop(move || {
-        app.unwrap().update_vocabulary(words.into());
+        if let Some(window) = app_clone.upgrade() {
+            let vocab_data: Vec<VocabData> = words.iter().map(|w| {
+                VocabData {
+                    word: SharedString::from(&w.word),
+                    reading: SharedString::from(&w.reading),
+                    struggles: w.struggles,
+                    next_review: SharedString::from(&w.next_review),
+                    level: w.level,
+                    is_due: w.is_due,
+                }
+            }).collect();
+            let model = ModelRc::new(VecModel::from(vocab_data));
+            window.set_vocab(model);
+        }
     }).ok();
 }
 
@@ -843,25 +993,16 @@ fn refresh_vocab(app: &slint::Weak<MainWindow>) {
 // HELPER FUNCTIONS
 // ════════════════════════════════════════════════════════════════
 
-fn add_message_to_ui(app: &slint::Weak<MainWindow>, msg: &ChatMessage) {
-    slint::invoke_from_event_loop(move || {
-        app.unwrap().add_message(
-            msg.role.clone().into(),
-            msg.content.clone().into(),
-        );
-    }).ok();
-}
-
 fn save_current_session() {
     let state = APP_STATE.read();
-    
+
     if state.chat_history.is_empty() {
         return;
     }
-    
+
     let now = chrono::Local::now();
     let session_id = now.format("%Y%m%d_%H%M%S").to_string();
-    
+
     let session_data = serde_json::json!({
         "id": session_id,
         "level": state.current_level,
@@ -877,7 +1018,7 @@ fn save_current_session() {
             })
         }).collect::<Vec<_>>()
     });
-    
+
     let session_path = get_sessions_dir().join(format!("session_{}.json", session_id));
     if let Err(e) = fs::write(&session_path, session_data.to_string()) {
         error!("Failed to save session: {}", e);
@@ -902,12 +1043,12 @@ fn extract_japanese_words(text: &str) -> String {
 
 fn load_config_string(key: &str) -> Option<String> {
     let config_path = get_data_dir().join("config.json");
-    
+
     if let Ok(content) = fs::read_to_string(&config_path) {
         if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
             return data[key].as_str().map(String::from);
         }
     }
-    
+
     None
 }
