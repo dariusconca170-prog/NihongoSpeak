@@ -3202,6 +3202,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "slint-center-win",
 ]
 
 [[package]]
@@ -4859,6 +4860,16 @@ dependencies = [
  "i-slint-compiler",
  "spin_on",
  "toml_edit 0.24.1+spec-1.1.0",
+]
+
+[[package]]
+name = "slint-center-win"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00c7ed3dcfbafe6a53051c3a1e4ed72a85d6ac4a7f9ed2d63232fe4b59620e5a"
+dependencies = [
+ "i-slint-backend-winit",
+ "slint",
 ]
 
 [[package]]
