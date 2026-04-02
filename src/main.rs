@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use anyhow::Result;
-use log::{error, info};
+use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use slint::{SharedString, ModelRc, VecModel, Model};
+use slint::{SharedString, ModelRc, VecModel, Model, PhysicalPosition};
+use std::collections::HashMap;
 use std::fs;
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -31,6 +33,14 @@ pub struct AppState {
     pub last_expected_japanese: String,
     pub sessions: Vec<SessionSummary>,
     pub vocab_words: Vec<VocabWord>,
+    pub available_scenarios: Vec<Scenario>,
+    pub current_scenario: Option<Scenario>,
+    /// Stable ID for the current in-progress session.  Cleared on new chat.
+    pub current_session_id: Option<String>,
+    /// UTC timestamp of when the current session started.
+    pub current_session_started: Option<String>,
+    /// VOICEVOX base URL (default: http://localhost:50021)
+    pub voicevox_url: String,
 }
 
 impl Default for AppState {
@@ -42,18 +52,61 @@ impl Default for AppState {
             is_recording: false,
             is_processing: false,
             tts_enabled: true,
-            tts_voice: "Nanami".to_string(),
+            tts_voice: "Zundamon".to_string(),
             tts_rate: "Normal".to_string(),
             whisper_device: "cpu".to_string(),
             api_key: String::new(),
             last_expected_japanese: String::new(),
             sessions: Vec::new(),
             vocab_words: Vec::new(),
+            available_scenarios: vec![
+                Scenario {
+                    id: "ramen_shop".to_string(),
+                    name: "Ramen Shop".to_string(),
+                    difficulty: "Beginner".to_string(),
+                    icon: "🍜".to_string(),
+                    system_prompt: "You are a friendly ramen shop waiter in Tokyo. Speak mostly in Japanese, using simple vocabulary. Help the customer order ramen by asking about broth preference (醤油、塩、味噌、豚骨), toppings, and noodle firmness. Stay in character as a helpful, cheerful waiter.".to_string(),
+                    initial_message: "いらっしゃいませ！🍜 ようこそ、麺屋へ！\nご注文はお決まりですか？\n(What would you like to order? We have 醤油、塩、味噌、and 豚骨 broth!)".to_string(),
+                },
+                Scenario {
+                    id: "convenience_store".to_string(),
+                    name: "Convenience Store".to_string(),
+                    difficulty: "Beginner".to_string(),
+                    icon: "🏪".to_string(),
+                    system_prompt: "You are a convenience store clerk at a Japanese 7-Eleven. Use polite, simple Japanese. Help the customer find items, handle a purchase, and practice common phrases like 袋はご利用ですか and レシートはご入り用ですか. Stay in character.".to_string(),
+                    initial_message: "いらっしゃいませ！🏪 何かお探しですか？\n(Welcome! Are you looking for something in particular?)".to_string(),
+                },
+                Scenario {
+                    id: "train_station".to_string(),
+                    name: "Train Station".to_string(),
+                    difficulty: "Intermediate".to_string(),
+                    icon: "🚉".to_string(),
+                    system_prompt: "You are a station attendant at a busy Tokyo train station. Help the user buy tickets, find platforms, and understand train announcements. Use intermediate Japanese with some kanji. Practice vocabulary around 切符、ホーム、乗り換え and directions.".to_string(),
+                    initial_message: "こんにちは！🚉 どちらまでいらっしゃいますか？\n(Hello! Where are you heading today?)".to_string(),
+                },
+                Scenario {
+                    id: "job_interview".to_string(),
+                    name: "Job Interview".to_string(),
+                    difficulty: "Advanced".to_string(),
+                    icon: "💼".to_string(),
+                    system_prompt: "You are a Japanese HR manager conducting a formal job interview. Use keigo (敬語) and business Japanese throughout. Ask the candidate about their experience, strengths, and reasons for applying. Correct any non-keigo responses gently and model proper business speech.".to_string(),
+                    initial_message: "本日はお越しいただきありがとうございます。💼\nどうぞお座りください。自己紹介をお願いできますか？\n(Thank you for coming today. Please take a seat. Could you introduce yourself?)".to_string(),
+                },
+            ],
+            current_scenario: None,
+            current_session_id: None,
+            current_session_started: None,
+            voicevox_url: std::env::var("VOICEVOX_URL")
+                .unwrap_or_else(|_| "http://localhost:50021".to_string()),
         }
     }
 }
 
 static APP_STATE: Lazy<Arc<RwLock<AppState>>> = Lazy::new(|| Arc::new(RwLock::new(AppState::default())));
+
+/// In-memory cache mapping message content → WAV bytes so replays are instant.
+static AUDIO_CACHE: Lazy<Arc<RwLock<HashMap<String, Vec<u8>>>>> =
+    Lazy::new(|| Arc::new(RwLock::new(HashMap::new())));
 
 // ════════════════════════════════════════════════════════════════
 // DATA STRUCTURES
@@ -74,6 +127,17 @@ pub struct SessionSummary {
     pub started: String,
     pub message_count: usize,
     pub preview: String,
+    pub scenario_title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scenario {
+    pub id: String,
+    pub name: String,
+    pub difficulty: String,
+    pub icon: String,
+    pub system_prompt: String,
+    pub initial_message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,21 +167,21 @@ fn get_sessions_dir() -> PathBuf {
 fn get_python_executable() -> PathBuf {
     let mut path = std::env::current_exe().unwrap_or_default();
     path.pop(); // Remove the .exe name to get the folder
-    
+
     #[cfg(target_os = "windows")]
     {
         path.push("python_runtime");
         path.push("Scripts");
         path.push("python.exe");
     }
-    
+
     #[cfg(not(target_os = "windows"))]
     {
         path.push("python_runtime");
         path.push("bin");
         path.push("python3");
     }
-    
+
     path
 }
 
@@ -126,6 +190,223 @@ fn ensure_directories() {
     let sessions_dir = get_sessions_dir();
     fs::create_dir_all(&sessions_dir).ok();
     fs::create_dir_all(data_dir.join("scripts")).ok();
+    fs::create_dir_all(data_dir.join("vocab")).ok();
+}
+
+// ════════════════════════════════════════════════════════════════
+// VOICEVOX SPEAKER MAPPING
+// ════════════════════════════════════════════════════════════════
+
+/// Maps the user-facing voice name stored in `tts_voice` to the
+/// VOICEVOX speaker ID used in the `/synthesis` endpoint.
+///
+/// The default IDs ship with the standard VOICEVOX distribution.
+/// Add more entries as needed.
+fn voicevox_speaker_id(voice_name: &str) -> i32 {
+    match voice_name {
+        "Zundamon"        => 3,
+        "Zundamon Amaama" => 1,
+        "Zundamon Tsuntsun" => 7,
+        "Metan"           => 2,   // Shikoku Metan (normal)
+        "Metamon"         => 2,   // alias
+        "Tsumugi"         => 8,   // Kasukabe Tsumugi
+        "Ritsu"           => 9,   // Kurita Ritsu (9 in newer builds)
+        "Himari"          => 14,  // Amehare Himari
+        "Sora"            => 16,  // Kujirai Sora
+        // Legacy edge-tts names → sensible defaults
+        "Nanami"          => 3,
+        "Keita"           => 13,
+        _                 => 3,   // fall back to Zundamon
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// VOICEVOX SPEECH SYNTHESIS
+// ════════════════════════════════════════════════════════════════
+
+/// Extracts only the Japanese portions of a mixed-language string.
+/// Keeps hiragana, katakana, CJK kanji, full-width punctuation,
+/// and common Japanese punctuation marks so VOICEVOX receives
+/// well-formed sentences instead of isolated character runs.
+fn extract_japanese_text_for_tts(text: &str) -> String {
+    let mut result = String::new();
+    let mut last_was_jp = false;
+
+    for ch in text.chars() {
+        let is_jp = matches!(ch,
+    '\u{3040}'..='\u{309F}' | // hiragana
+    '\u{30A0}'..='\u{30FF}' | // katakana
+    '\u{4E00}'..='\u{9FFF}' | // CJK Unified Ideographs
+    '\u{3000}'..='\u{303F}' | // CJK symbols & punctuation (。、！？…)
+    '\u{FF01}'..='\u{FF60}' | // full-width ASCII variants
+    '\u{FF61}'..='\u{FF9F}'   // half-width katakana
+);
+
+        if is_jp {
+            result.push(ch);
+            last_was_jp = true;
+        } else if last_was_jp && (ch == ' ' || ch == '\n') {
+            // Replace whitespace between Japanese runs with a pause marker
+            result.push('、');
+            last_was_jp = false;
+        } else {
+            last_was_jp = false;
+        }
+    }
+
+    // Trim trailing punctuation-only artifacts
+    let trimmed = result.trim_matches(|c: char| c == '、' || c == ' ').to_string();
+    trimmed
+}
+
+/// Calls the local VOICEVOX engine to synthesise speech and returns
+/// raw WAV bytes.  Returns `Err` if VOICEVOX is unreachable or the
+/// text is empty / not Japanese.
+fn generate_speech(text: &str) -> Result<Vec<u8>> {
+    let jp_text = extract_japanese_text_for_tts(text);
+    if jp_text.is_empty() {
+        anyhow::bail!("No Japanese text to synthesise");
+    }
+
+    let (base_url, speaker_id, speed_scale) = {
+        let state = APP_STATE.read();
+        let url = state.voicevox_url.clone();
+        let sid = voicevox_speaker_id(&state.tts_voice);
+        let speed = match state.tts_rate.as_str() {
+            "Very Slow" => 0.6,
+            "Slow"      => 0.8,
+            "Normal"    => 1.0,
+            "Fast"      => 1.3,
+            "Very Fast" => 1.6,
+            _           => 1.0,
+        };
+        (url, sid, speed)
+    };
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    // 1. Audio query – obtain prosody JSON
+    let query_url = format!(
+        "{}/audio_query?text={}&speaker={}",
+        base_url,
+        urlencoding::encode(&jp_text),
+        speaker_id
+    );
+
+    let query_resp = client
+        .post(&query_url)
+        .header("Content-Type", "application/json")
+        .send()
+        .map_err(|e| anyhow::anyhow!(
+            "VOICEVOX unreachable at {} – is it running? ({})", base_url, e
+        ))?;
+
+    if !query_resp.status().is_success() {
+        let status = query_resp.status();
+        let body = query_resp.text().unwrap_or_default();
+        anyhow::bail!("VOICEVOX /audio_query failed ({}): {}", status, body);
+    }
+
+    let mut query_json: serde_json::Value = query_resp.json()?;
+
+    // Apply speed scaling
+    if let Some(obj) = query_json.as_object_mut() {
+        obj.insert("speedScale".to_string(), serde_json::json!(speed_scale));
+    }
+
+    // 2. Synthesis – obtain WAV bytes
+    let synth_url = format!("{}/synthesis?speaker={}", base_url, speaker_id);
+
+    let synth_resp = client
+        .post(&synth_url)
+        .header("Content-Type", "application/json")
+        .json(&query_json)
+        .send()?;
+
+    if !synth_resp.status().is_success() {
+        let status = synth_resp.status();
+        let body = synth_resp.text().unwrap_or_default();
+        anyhow::bail!("VOICEVOX /synthesis failed ({}): {}", status, body);
+    }
+
+    let wav_bytes = synth_resp.bytes()?.to_vec();
+    Ok(wav_bytes)
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUDIO PLAYBACK (rodio)
+// ════════════════════════════════════════════════════════════════
+
+/// Plays raw WAV bytes through the default audio output device.
+/// This function blocks until playback finishes, so call it from a
+/// background thread.
+fn play_audio_buffer(wav_bytes: &[u8]) -> Result<()> {
+    let (_stream, stream_handle) = rodio::OutputStream::try_default()
+        .map_err(|e| anyhow::anyhow!("No audio output device: {}", e))?;
+
+    let sink = rodio::Sink::try_new(&stream_handle)
+        .map_err(|e| anyhow::anyhow!("Failed to create audio sink: {}", e))?;
+
+    let cursor = Cursor::new(wav_bytes.to_vec());
+    let source = rodio::Decoder::new(cursor)
+        .map_err(|e| anyhow::anyhow!("Failed to decode WAV: {}", e))?;
+
+    sink.append(source);
+    sink.sleep_until_end(); // blocks until done
+
+    Ok(())
+}
+
+/// High-level helper: generate (or retrieve from cache) and play speech
+/// for the given text.  Designed to run on a background thread.
+fn speak_text(text: &str, app: &slint::Weak<MainWindow>) {
+    // Check cache first
+    {
+        let cache = AUDIO_CACHE.read();
+        if let Some(cached_wav) = cache.get(text) {
+            info!("Playing cached audio ({} bytes)", cached_wav.len());
+            set_status(app, "🔊 Speaking...");
+            if let Err(e) = play_audio_buffer(cached_wav) {
+                error!("Playback error: {}", e);
+                set_status(app, &format!("❌ Playback: {}", e));
+                return;
+            }
+            set_status(app, "✅ Ready");
+            return;
+        }
+    }
+
+    // Generate fresh audio
+    set_status(app, "🔊 Generating speech...");
+    match generate_speech(text) {
+        Ok(wav_bytes) => {
+            // Cache for replay
+            {
+                let mut cache = AUDIO_CACHE.write();
+                // Cap cache at ~50 entries to avoid unbounded memory growth
+                if cache.len() > 50 {
+                    // Evict oldest by just clearing – simple but effective
+                    cache.clear();
+                }
+                cache.insert(text.to_string(), wav_bytes.clone());
+            }
+
+            set_status(app, "🔊 Speaking...");
+            if let Err(e) = play_audio_buffer(&wav_bytes) {
+                error!("Playback error: {}", e);
+                set_status(app, &format!("❌ Playback: {}", e));
+                return;
+            }
+            set_status(app, "✅ Ready");
+        }
+        Err(e) => {
+            warn!("VOICEVOX synthesis failed, falling back to edge-tts: {}", e);
+            // Fallback to edge-tts via Python
+            handle_play_audio_edge_tts(app, text.to_string());
+        }
+    }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -154,7 +435,12 @@ Example: '[EXCITED] すごい！'
 "#;
 
     let base_system = include_str!("../resources/system_prompt.txt");
-    let system_content = format!("{}{}", base_system, emotion_rule);
+    let scenario_prompt = {
+        let state = APP_STATE.read();
+        state.current_scenario.as_ref().map(|s| s.system_prompt.clone())
+    };
+    let active_system = scenario_prompt.as_deref().unwrap_or(base_system);
+    let system_content = format!("{}{}", active_system, emotion_rule);
 
     chat_messages.insert(0, serde_json::json!({
         "role": "system",
@@ -268,6 +554,94 @@ fn set_status(app: &slint::Weak<MainWindow>, text: &str) {
 
 
 // ════════════════════════════════════════════════════════════════
+// LEGACY EDGE-TTS FALLBACK
+// ════════════════════════════════════════════════════════════════
+
+/// Fallback TTS using edge-tts via Python when VOICEVOX is unavailable.
+fn handle_play_audio_edge_tts(app: &slint::Weak<MainWindow>, text: String) {
+    info!("Falling back to edge-tts for: {}", &text[..text.len().min(60)]);
+
+    set_status(app, "🔊 Speaking (edge-tts)...");
+
+    let (voice, rate) = {
+        let state = APP_STATE.read();
+        let v = match state.tts_voice.as_str() {
+            "Nanami" | "Zundamon" | "Metan" | "Metamon" | "Tsumugi" => "Nanami",
+            "Keita" | "Ritsu" => "Keita",
+            other => other,
+        };
+        (v.to_string(), state.tts_rate.clone())
+    };
+
+    let escaped_text = text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ");
+    let script = format!(
+        r#"
+import asyncio
+import edge_tts
+import os
+import tempfile
+
+async def main():
+    rate_map = {{
+        "Very Slow": "-50%",
+        "Slow": "-25%",
+        "Normal": "+0%",
+        "Fast": "+20%",
+        "Very Fast": "+50%"
+    }}
+
+    voice_map = {{
+        "Nanami": "ja-JP-NanamiNeural",
+        "Keita": "ja-JP-KeitaNeural"
+    }}
+
+    communicate = edge_tts.Communicate(
+        "{text}",
+        voice_map.get("{voice}", "ja-JP-NanamiNeural"),
+        rate=rate_map.get("{rate}", "+0%")
+    )
+
+    output_file = os.path.join(tempfile.gettempdir(), "sensei_tts.mp3")
+    await communicate.save(output_file)
+
+    try:
+        import pygame
+        pygame.mixer.init()
+        pygame.mixer.music.load(output_file)
+        pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():
+            pygame.time.Clock().tick(10)
+    except ImportError:
+        import subprocess
+        import sys
+        if sys.platform == 'win32':
+            subprocess.run(['powershell', '-c', f'(New-Object Media.SoundPlayer "{{}}")'.format(output_file) + '.PlaySync()'], capture_output=True)
+        elif sys.platform == 'darwin':
+            subprocess.run(['afplay', output_file], capture_output=True)
+        else:
+            subprocess.run(['aplay', output_file], capture_output=True)
+
+    try:
+        os.remove(output_file)
+    except:
+        pass
+
+asyncio.run(main())
+"#,
+        text = escaped_text,
+        voice = voice,
+        rate = rate
+    );
+
+    let _ = Command::new(get_python_executable())
+        .args(&["-c", &script])
+        .output();
+
+    set_status(app, "✅ Ready");
+}
+
+
+// ════════════════════════════════════════════════════════════════
 // SLINT MAIN
 // ════════════════════════════════════════════════════════════════
 
@@ -276,6 +650,9 @@ fn main() {
 
     info!("日本語 Sensei starting...");
     ensure_directories();
+
+    // Restore vocab progress from previous sessions
+    load_vocabulary_from_disk();
 
     // Load API key from environment or config file
     let api_key = std::env::var("GROQ_API_KEY")
@@ -286,9 +663,58 @@ fn main() {
     {
         let mut state = APP_STATE.write();
         state.api_key = api_key.clone();
+
+        // Load VOICEVOX URL from config if set
+        if let Some(url) = load_config_string("voicevox_url") {
+            state.voicevox_url = url;
+        }
+        // Load preferred voice from config if set
+        if let Some(voice) = load_config_string("tts_voice") {
+            state.tts_voice = voice;
+        }
+    }
+
+    // Probe VOICEVOX availability at startup
+    {
+        let url = APP_STATE.read().voicevox_url.clone();
+        match reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .and_then(|c| c.get(&format!("{}/version", url)).send())
+        {
+            Ok(resp) if resp.status().is_success() => {
+                let ver = resp.text().unwrap_or_default();
+                info!("VOICEVOX engine detected: v{}", ver.trim().trim_matches('"'));
+            }
+            _ => {
+                warn!(
+                    "VOICEVOX not reachable at {} – TTS will fall back to edge-tts",
+                    url
+                );
+            }
+        }
     }
 
     let app = MainWindow::new().expect("Failed to create main window");
+
+    // ── Center window on screen ──
+    app.show().expect("Failed to show main window");
+    {
+        let window = app.window();
+        let scale_factor = window.scale_factor();
+        let window_size = window.size();
+        let win_width = window_size.width as f32 / scale_factor;
+        let win_height = window_size.height as f32 / scale_factor;
+
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        {
+            let screen_width = 1920.0_f32;
+            let screen_height = 1080.0_f32;
+            let x = ((screen_width - win_width) / 2.0 * scale_factor) as i32;
+            let y = ((screen_height - win_height) / 2.0 * scale_factor) as i32;
+            window.set_position(slint::WindowPosition::Physical(PhysicalPosition::new(x, y)));
+        }
+    }
 
     // Set up callbacks
     let app_weak = app.as_weak();
@@ -327,7 +753,7 @@ fn main() {
         });
     }
 
-    // ── Play audio ──
+    // ── Play audio (speaker icon on chat bubble) ──
     {
         let app_handle = app_weak.clone();
         app.on_play_audio(move |text| {
@@ -402,21 +828,74 @@ fn main() {
         });
     }
 
-    // ── Load sessions ──
+    // ── Load sessions (history sidebar) ──
     {
         let app_handle = app_weak.clone();
         app.on_load_sessions(move || {
             let app = app_handle.clone();
-            load_sessions_handler(&app);
+            std::thread::spawn(move || {
+                load_sessions_handler(&app);
+            });
         });
     }
 
-    // ── Load session ──
+    // ── Load session (scenario selection) ──
     {
         let app_handle = app_weak.clone();
-        app.on_load_session(move |session_id| {
+        app.on_load_session(move |scenario_id| {
             let app = app_handle.clone();
-            load_session_handler(&app, session_id.to_string());
+            let id = scenario_id.to_string();
+
+            let scenario = {
+                let state = APP_STATE.read();
+                state.available_scenarios.iter().find(|s| s.id == id).cloned()
+            };
+
+            if let Some(scenario) = scenario {
+                let greeting = scenario.initial_message.clone();
+
+                {
+                    let mut state = APP_STATE.write();
+                    state.current_scenario        = Some(scenario);
+                    state.chat_history.clear();
+                    state.current_session_id      = None;
+                    state.current_session_started = None;
+                }
+
+                let greeting_msg = ChatMessage {
+                    role: "assistant".to_string(),
+                    content: greeting.clone(),
+                    timestamp: current_timestamp(),
+                    emotion: Some("NORMAL".to_string()),
+                };
+
+                // Speak the scenario greeting automatically if TTS is enabled
+                let tts_enabled = APP_STATE.read().tts_enabled;
+                let app_for_tts = app.clone();
+                let greeting_for_tts = greeting.clone();
+
+                slint::invoke_from_event_loop(move || {
+                    if let Some(window) = app.upgrade() {
+                        clear_messages_ui(&window);
+                        let greeting_data = vec![MessageData {
+                            role: SharedString::from(&greeting_msg.role),
+                            content: SharedString::from(&greeting_msg.content),
+                        }];
+                        let model = ModelRc::new(VecModel::from(greeting_data));
+                        window.set_messages(model);
+                        window.set_current_tab(0);
+                    }
+                }).ok();
+
+                if tts_enabled {
+                    std::thread::spawn(move || {
+                        speak_text(&greeting_for_tts, &app_for_tts);
+                    });
+                }
+            } else {
+                // Fall back to file-based session loading for non-scenario ids
+                load_session_handler(&app, id);
+            }
         });
     }
 
@@ -438,6 +917,18 @@ fn main() {
         });
     }
 
+    // ── Mark word as struggle ──
+    {
+        let app_handle = app_weak.clone();
+        app.on_mark_word_struggle(move |word: SharedString| {
+            let app = app_handle.clone();
+            let word = word.to_string();
+            std::thread::spawn(move || {
+                on_mark_word_struggle(&app, word);
+            });
+        });
+    }
+
     // Welcome message
     let welcome = ChatMessage {
         role: "assistant".to_string(),
@@ -448,12 +939,61 @@ fn main() {
 
     add_message_to_ui(&app_weak, &welcome);
 
+    // Populate the history sidebar with saved sessions before entering the event loop.
+    {
+        let app_handle = app_weak.clone();
+        std::thread::spawn(move || {
+            load_sessions_handler(&app_handle);
+        });
+    }
+
     app.run().expect("Failed to run application");
 }
 
 // ════════════════════════════════════════════════════════════════
 // MESSAGE HANDLERS
 // ════════════════════════════════════════════════════════════════
+
+/// Called when the user taps "Struggle" / "Repeat" on a vocab card.
+/// Increments the struggle count and pushes the next-review date forward
+/// using a simple SRS interval: interval = 1 day * (struggles + 1).
+fn on_mark_word_struggle(app: &slint::Weak<MainWindow>, word: String) {
+    let updated_snapshot = {
+        let mut state = APP_STATE.write();
+
+        if let Some(entry) = state.vocab_words.iter_mut().find(|w| w.word == word) {
+            entry.struggles += 1;
+
+            let interval_days = entry.struggles as i64; // linear back-off
+            let next = chrono::Local::now()
+                .checked_add_signed(chrono::Duration::days(interval_days))
+                .unwrap_or_else(chrono::Local::now);
+            entry.next_review = next.format("%Y-%m-%d").to_string();
+
+            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+            entry.is_due = entry.next_review.as_str() <= today.as_str();
+        }
+
+        state.vocab_words.clone()
+    };
+
+    sync_vocabulary(&updated_snapshot);
+
+    let app_clone = app.clone();
+    slint::invoke_from_event_loop(move || {
+        if let Some(window) = app_clone.upgrade() {
+            let vocab_data: Vec<VocabData> = updated_snapshot.iter().map(|w| VocabData {
+                word: SharedString::from(&w.word),
+                reading: SharedString::from(&w.reading),
+                struggles: w.struggles,
+                next_review: SharedString::from(&w.next_review),
+                level: w.level,
+                is_due: w.is_due,
+            }).collect();
+            window.set_vocab(ModelRc::new(VecModel::from(vocab_data)));
+        }
+    }).ok();
+}
 
 fn handle_send_message(app: &slint::Weak<MainWindow>, text: String) {
     if text.trim().is_empty() {
@@ -510,20 +1050,48 @@ fn handle_send_message(app: &slint::Weak<MainWindow>, text: String) {
                 state.chat_history.push(assistant_msg.clone());
             }
 
+            // Extract new vocab words from the reply and persist them
+            integrate_vocab_from_reply(&reply);
+
+            // Refresh vocab tab in the UI
+            {
+                let app_clone = app.clone();
+                let vocab_snapshot = {
+                    let state = APP_STATE.read();
+                    state.vocab_words.clone()
+                };
+                slint::invoke_from_event_loop(move || {
+                    if let Some(window) = app_clone.upgrade() {
+                        let vocab_data: Vec<VocabData> = vocab_snapshot.iter().map(|w| VocabData {
+                            word: SharedString::from(&w.word),
+                            reading: SharedString::from(&w.reading),
+                            struggles: w.struggles,
+                            next_review: SharedString::from(&w.next_review),
+                            level: w.level,
+                            is_due: w.is_due,
+                        }).collect();
+                        window.set_vocab(ModelRc::new(VecModel::from(vocab_data)));
+                    }
+                }).ok();
+            }
+
             // Save session
             save_current_session();
 
             add_message_to_ui(app, &assistant_msg);
 
-            // TTS if enabled
+            // TTS – speak the assistant reply using VOICEVOX (with edge-tts fallback)
             let tts_enabled = {
                 let state = APP_STATE.read();
                 state.tts_enabled
             };
 
             if tts_enabled {
-                set_status(app, "🔊 Speaking...");
-                handle_play_audio(app, reply);
+                let app_for_tts = app.clone();
+                let reply_for_tts = reply.clone();
+                // speak_text already runs blocking I/O, and we're already
+                // on a background thread, so call directly.
+                speak_text(&reply_for_tts, &app_for_tts);
             }
 
             set_status(app, "✅ Ready");
@@ -660,82 +1228,11 @@ print(json.dumps(result))
     ))
 }
 
+/// Unified play-audio handler invoked from the speaker icon on chat bubbles.
+/// Uses VOICEVOX with automatic edge-tts fallback.
 fn handle_play_audio(app: &slint::Weak<MainWindow>, text: String) {
-    info!("Playing TTS for: {}", text);
-
-    set_status(app, "🔊 Speaking...");
-
-    // Use edge-tts via bundled executable
-    let (voice, rate) = {
-        let state = APP_STATE.read();
-        (state.tts_voice.clone(), state.tts_rate.clone())
-    };
-
-    let escaped_text = text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ");
-    let script = format!(
-        r#"
-import asyncio
-import edge_tts
-import os
-import tempfile
-
-async def main():
-    rate_map = {{
-        "Very Slow": "-50%",
-        "Slow": "-25%",
-        "Normal": "+0%",
-        "Fast": "+20%",
-        "Very Fast": "+50%"
-    }}
-
-    voice_map = {{
-        "Nanami": "ja-JP-NanamiNeural",
-        "Keita": "ja-JP-KeitaNeural"
-    }}
-
-    communicate = edge_tts.Communicate(
-        "{text}",
-        voice_map.get("{voice}", "ja-JP-NanamiNeural"),
-        rate=rate_map.get("{rate}", "+0%")
-    )
-
-    output_file = os.path.join(tempfile.gettempdir(), "sensei_tts.mp3")
-    await communicate.save(output_file)
-
-    try:
-        import pygame
-        pygame.mixer.init()
-        pygame.mixer.music.load(output_file)
-        pygame.mixer.music.play()
-        while pygame.mixer.music.get_busy():
-            pygame.time.Clock().tick(10)
-    except ImportError:
-        import subprocess
-        import sys
-        if sys.platform == 'win32':
-            subprocess.run(['powershell', '-c', f'(New-Object Media.SoundPlayer "{{}}")'.format(output_file) + '.PlaySync()'], capture_output=True)
-        elif sys.platform == 'darwin':
-            subprocess.run(['afplay', output_file], capture_output=True)
-        else:
-            subprocess.run(['aplay', output_file], capture_output=True)
-
-    try:
-        os.remove(output_file)
-    except:
-        pass
-
-asyncio.run(main())
-"#,
-        text = escaped_text,
-        voice = voice,
-        rate = rate
-    );
-
-    let _ = Command::new(get_python_executable())
-        .args(&["-c", &script])
-        .output();
-
-    set_status(app, "✅ Ready");
+    info!("Play audio requested for: {}...", &text[..text.len().min(60)]);
+    speak_text(&text, app);
 }
 
 fn handle_translate(app: &slint::Weak<MainWindow>, text: String) {
@@ -770,6 +1267,15 @@ fn clear_chat(app: &slint::Weak<MainWindow>) {
     {
         let mut state = APP_STATE.write();
         state.chat_history.clear();
+        state.current_session_id      = None;
+        state.current_session_started = None;
+        state.current_scenario        = None;
+    }
+
+    // Clear the audio cache when starting a fresh conversation
+    {
+        let mut cache = AUDIO_CACHE.write();
+        cache.clear();
     }
 
     let app_clone = app.clone();
@@ -833,27 +1339,58 @@ fn load_sessions_handler(app: &slint::Weak<MainWindow>) {
 
     if let Ok(entries) = fs::read_dir(&sessions_dir) {
         for entry in entries.flatten() {
-            if let Ok(content) = fs::read_to_string(entry.path()) {
+            let path = entry.path();
+            // Only process .json files
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let started = data["started"].as_str().unwrap_or("").replace("T", " ");
-                    let level = data["level"].as_str().unwrap_or("?");
-                    let messages = data["messages"].as_array().map(|a| a.len()).unwrap_or(0);
+                    let id = data["id"].as_str().unwrap_or("").to_string();
+                    if id.is_empty() {
+                        continue;
+                    }
 
-                    let preview = data["messages"]
-                        .as_array()
-                        .and_then(|arr| arr.iter().find(|m| m["role"] == "user"))
-                        .and_then(|m| m["content"].as_str())
+                    let started = data["started"]
+                        .as_str()
                         .unwrap_or("")
+                        .replace("T", " ")
+                        // Trim the time portion to just the date + HH:MM
                         .chars()
-                        .take(50)
+                        .take(16)
                         .collect::<String>();
 
+                    let level = data["level"].as_str().unwrap_or("?").to_string();
+                    let scenario_title = data["scenario_title"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let message_count = data["messages"]
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+
+                    // Build a one-line preview: "Ramen Shop · 12 msgs" or the first user line
+                    let preview = if !scenario_title.is_empty() {
+                        format!("{} · {} msgs", scenario_title, message_count)
+                    } else {
+                        data["messages"]
+                            .as_array()
+                            .and_then(|arr| arr.iter().find(|m| m["role"] == "user"))
+                            .and_then(|m| m["content"].as_str())
+                            .unwrap_or("(no messages)")
+                            .chars()
+                            .take(50)
+                            .collect::<String>()
+                    };
+
                     sessions.push(SessionSummary {
-                        id: data["id"].as_str().unwrap_or("").to_string(),
-                        level: level.to_string(),
+                        id,
+                        level,
                         started,
-                        message_count: messages,
+                        message_count,
                         preview,
+                        scenario_title,
                     });
                 }
             }
@@ -904,34 +1441,55 @@ fn load_session_handler(app: &slint::Weak<MainWindow>, session_id: String) {
                 })
                 .unwrap_or_default();
 
-            let level = data["level"].as_str().unwrap_or("A0.1").to_string();
-            let started = data["started"].as_str().unwrap_or("").replace("T", " ");
+            let level          = data["level"].as_str().unwrap_or("A0.1").to_string();
+            let started_raw    = data["started"].as_str().unwrap_or("").to_string();
+            let started_pretty = started_raw.replace("T", " ").chars().take(16).collect::<String>();
+            let scenario_title = data["scenario_title"].as_str().unwrap_or("").to_string();
+
+            // Try to match the saved scenario_title back to a known Scenario so the
+            // AI context is restored correctly for continued conversation.
+            let restored_scenario = if !scenario_title.is_empty() {
+                let state = APP_STATE.read();
+                state.available_scenarios
+                    .iter()
+                    .find(|s| s.name == scenario_title)
+                    .cloned()
+            } else {
+                None
+            };
 
             {
                 let mut state = APP_STATE.write();
-                state.chat_history = messages.clone();
-                state.current_level = level.clone();
+                state.chat_history         = messages.clone();
+                state.current_level        = level.clone();
+                state.current_scenario     = restored_scenario;
+                // Re-use the same stable ID so further saves overwrite this file.
+                state.current_session_id      = Some(session_id.clone());
+                state.current_session_started = Some(started_raw);
             }
 
-            let app_clone = app.clone();
-            let msg_count = messages.len();
+            // Clear audio cache when loading a different session
+            {
+                let mut cache = AUDIO_CACHE.write();
+                cache.clear();
+            }
+
+            let app_clone  = app.clone();
+            let msg_count  = messages.len();
             slint::invoke_from_event_loop(move || {
                 if let Some(window) = app_clone.upgrade() {
                     clear_messages_ui(&window);
 
-                    let header_msg = ChatMessage {
-                        role: "assistant".to_string(),
-                        content: format!("📂 Restored session from {} (Level: {}, {} messages)", started, level, msg_count),
-                        timestamp: current_timestamp(),
-                        emotion: Some("NORMAL".to_string()),
+                    let label = if !scenario_title.is_empty() {
+                        format!("📂 {} — {} (Level: {}, {} messages)", scenario_title, started_pretty, level, msg_count)
+                    } else {
+                        format!("📂 Restored session from {} (Level: {}, {} messages)", started_pretty, level, msg_count)
                     };
 
-                    // Build all messages at once
-                    let mut all_messages: Vec<MessageData> = Vec::new();
-                    all_messages.push(MessageData {
-                        role: SharedString::from(&header_msg.role),
-                        content: SharedString::from(&header_msg.content),
-                    });
+                    let mut all_messages: Vec<MessageData> = vec![MessageData {
+                        role: SharedString::from("assistant"),
+                        content: SharedString::from(label),
+                    }];
                     for m in &messages {
                         all_messages.push(MessageData {
                             role: SharedString::from(&m.role),
@@ -940,8 +1498,9 @@ fn load_session_handler(app: &slint::Weak<MainWindow>, session_id: String) {
                     }
                     let model = ModelRc::new(VecModel::from(all_messages));
                     window.set_messages(model);
-
-                    window.set_status_text(SharedString::from(format!("📂 Session loaded ({} messages)", msg_count)));
+                    window.set_status_text(SharedString::from(
+                        format!("📂 Session loaded ({} messages)", msg_count)
+                    ));
                     window.set_current_tab(0);
                 }
             }).ok();
@@ -1013,23 +1572,38 @@ fn refresh_vocab_handler(app: &slint::Weak<MainWindow>) {
 // ════════════════════════════════════════════════════════════════
 
 fn save_current_session() {
-    let state = APP_STATE.read();
+    let mut state = APP_STATE.write();
 
     if state.chat_history.is_empty() {
         return;
     }
 
     let now = chrono::Local::now();
-    let session_id = now.format("%Y%m%d_%H%M%S").to_string();
+
+    // Allocate a stable ID the first time; reuse it on every subsequent save.
+    if state.current_session_id.is_none() {
+        state.current_session_id = Some(now.format("%Y%m%d_%H%M%S").to_string());
+        state.current_session_started = Some(now.to_rfc3339());
+    }
+
+    let session_id = state.current_session_id.clone().unwrap();
+    let started    = state.current_session_started.clone().unwrap_or_else(|| now.to_rfc3339());
+    let level      = state.current_level.clone();
+    let scenario_title = state
+        .current_scenario
+        .as_ref()
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
 
     let session_data = serde_json::json!({
-        "id": session_id,
-        "level": state.current_level,
-        "started": now.to_rfc3339(),
-        "updated": now.to_rfc3339(),
+        "id":             session_id.clone(),
+        "level":          level,
+        "scenario_title": scenario_title,
+        "started":        started,
+        "updated":        now.to_rfc3339(),
         "messages": state.chat_history.iter().map(|m| {
             serde_json::json!({
-                "role": m.role,
+                "role":    m.role,
                 "content": m.content,
                 "time": chrono::DateTime::from_timestamp(m.timestamp, 0)
                     .map(|dt| dt.to_rfc3339())
@@ -1058,6 +1632,139 @@ fn extract_japanese_words(text: &str) -> String {
         .take(100)
         .collect();
     japanese
+}
+
+/// Splits Japanese text into discrete words (runs of kanji/kana).
+/// Returns deduplicated words of 1–8 characters, skipping pure-hiragana
+/// particles that are a single character.
+fn segment_japanese_words(text: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for ch in text.chars() {
+        let is_jp = matches!(ch,
+            '\u{3040}'..='\u{309F}' | // hiragana
+            '\u{30A0}'..='\u{30FF}' | // katakana
+            '\u{4E00}'..='\u{9FFF}'   // kanji (CJK unified)
+        );
+        if is_jp {
+            current.push(ch);
+        } else {
+            if !current.is_empty() {
+                let w = std::mem::take(&mut current);
+                if w.chars().count() >= 2 && w.chars().count() <= 8 {
+                    words.push(w);
+                }
+            }
+        }
+    }
+    if current.chars().count() >= 2 && current.chars().count() <= 8 {
+        words.push(current);
+    }
+
+    words.sort();
+    words.dedup();
+    words
+}
+
+/// Returns the path to vocab.json.
+fn get_vocab_path() -> PathBuf {
+    get_data_dir().join("vocab.json")
+}
+
+/// Serialises the entire vocab_words vector to vocab.json.
+fn sync_vocabulary(words: &[VocabWord]) {
+    let obj: serde_json::Map<String, serde_json::Value> = words
+        .iter()
+        .map(|w| {
+            let entry = serde_json::json!({
+                "reading":     w.reading,
+                "struggles":   w.struggles,
+                "next_review": w.next_review,
+                "level":       w.level,
+            });
+            (w.word.clone(), entry)
+        })
+        .collect();
+
+    let json = serde_json::Value::Object(obj);
+    if let Err(e) = fs::write(get_vocab_path(), json.to_string()) {
+        error!("Failed to sync vocab.json: {}", e);
+    }
+}
+
+/// Loads vocab.json into AppState on startup.
+fn load_vocabulary_from_disk() {
+    let vocab_path = get_vocab_path();
+    if let Ok(content) = fs::read_to_string(&vocab_path) {
+        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(obj) = data.as_object() {
+                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let mut words: Vec<VocabWord> = obj
+                    .iter()
+                    .map(|(word, entry)| {
+                        let e = entry.as_object();
+                        let next_review = e
+                            .and_then(|o| o["next_review"].as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let is_due = next_review.as_str() <= today.as_str();
+                        VocabWord {
+                            word: word.clone(),
+                            reading: e
+                                .and_then(|o| o["reading"].as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            struggles: e
+                                .and_then(|o| o["struggles"].as_i64())
+                                .unwrap_or(0) as i32,
+                            next_review,
+                            level: e
+                                .and_then(|o| o["level"].as_i64())
+                                .unwrap_or(1) as i32,
+                            is_due,
+                        }
+                    })
+                    .collect();
+                words.sort_by(|a, b| b.struggles.cmp(&a.struggles));
+                let mut state = APP_STATE.write();
+                state.vocab_words = words;
+            }
+        }
+    }
+}
+
+/// Merges words extracted from a Groq reply into AppState and persists them.
+fn integrate_vocab_from_reply(reply: &str) {
+    let new_words = segment_japanese_words(reply);
+    if new_words.is_empty() {
+        return;
+    }
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut changed = false;
+
+    {
+        let mut state = APP_STATE.write();
+        for word in &new_words {
+            let already_exists = state.vocab_words.iter().any(|w| &w.word == word);
+            if !already_exists {
+                state.vocab_words.push(VocabWord {
+                    word: word.clone(),
+                    reading: String::new(),
+                    struggles: 0,
+                    next_review: today.clone(),
+                    level: 1,
+                    is_due: false,
+                });
+                changed = true;
+            }
+        }
+        if changed {
+            let snapshot = state.vocab_words.clone();
+            sync_vocabulary(&snapshot);
+        }
+    }
 }
 
 fn load_config_string(key: &str) -> Option<String> {
