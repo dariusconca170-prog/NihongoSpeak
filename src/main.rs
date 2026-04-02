@@ -86,7 +86,7 @@ pub struct VocabWord {
 }
 
 // ════════════════════════════════════════════════════════════════
-// SESSION MANAGEMENT
+// SESSION & PATH MANAGEMENT
 // ════════════════════════════════════════════════════════════════
 
 fn get_data_dir() -> PathBuf {
@@ -97,6 +97,27 @@ fn get_data_dir() -> PathBuf {
 
 fn get_sessions_dir() -> PathBuf {
     get_data_dir().join("sessions")
+}
+
+fn get_python_executable() -> PathBuf {
+    let mut path = std::env::current_exe().unwrap_or_default();
+    path.pop(); // Remove the .exe name to get the folder
+    
+    #[cfg(target_os = "windows")]
+    {
+        path.push("python_runtime");
+        path.push("Scripts");
+        path.push("python.exe");
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        path.push("python_runtime");
+        path.push("bin");
+        path.push("python3");
+    }
+    
+    path
 }
 
 fn ensure_directories() {
@@ -526,8 +547,8 @@ fn handle_start_recording(app: &slint::Weak<MainWindow>) {
         }).ok();
     }
 
-    // Start audio recording using Python script
-    let result = Command::new("python3")
+    // Start audio recording using Python script via bundled executable
+    let result = Command::new(get_python_executable())
         .args(&["-c", include_str!("../scripts/record_audio.py")])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -558,8 +579,8 @@ fn handle_stop_recording(app: &slint::Weak<MainWindow>) {
         }).ok();
     }
 
-    // Stop recording and get audio file
-    let audio_result = Command::new("python3")
+    // Stop recording and get audio file via bundled executable
+    let audio_result = Command::new(get_python_executable())
         .args(&["-c", include_str!("../scripts/stop_recording.py")])
         .output();
 
@@ -607,7 +628,7 @@ fn handle_stop_recording(app: &slint::Weak<MainWindow>) {
 }
 
 fn transcribe_audio(audio_path: &str) -> Result<(String, String)> {
-    // Use faster-whisper via Python
+    // Use faster-whisper via Python with bundled executable
     let script = format!(
         r#"
 import sys
@@ -626,7 +647,7 @@ print(json.dumps(result))
         audio_path = audio_path
     );
 
-    let output = Command::new("python3")
+    let output = Command::new(get_python_executable())
         .args(&["-c", &script])
         .output()?;
 
@@ -643,7 +664,7 @@ fn handle_play_audio(app: &slint::Weak<MainWindow>, text: String) {
 
     set_status(app, "🔊 Speaking...");
 
-    // Use edge-tts
+    // Use edge-tts via bundled executable
     let (voice, rate) = {
         let state = APP_STATE.read();
         (state.tts_voice.clone(), state.tts_rate.clone())
@@ -709,7 +730,7 @@ asyncio.run(main())
         rate = rate
     );
 
-    let _ = Command::new("python3")
+    let _ = Command::new(get_python_executable())
         .args(&["-c", &script])
         .output();
 
