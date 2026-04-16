@@ -1,0 +1,7 @@
+category: Productivity
+interface:
+  display_name: 'MCP Builder'
+  short_description: 'Guidance for building high-quality MCP servers that let LLMs safely and effectively interact with external services.'
+  icon_dark: './assets/icon-dark.png'
+  icon_light: './assets/icon-light.png'
+  default_prompt: 'Help build a high-quality MCP server.'

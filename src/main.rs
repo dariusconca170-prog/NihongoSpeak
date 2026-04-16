@@ -13,6 +13,8 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod config;
+
 slint::include_modules!();
 
 // ════════════════════════════════════════════════════════════════
@@ -654,22 +656,21 @@ fn handle_play_audio_edge_tts(app: &slint::Weak<MainWindow>, text: String) {
         (v.to_string(), state.tts_rate.clone())
     };
 
-    let escaped = text
-        .replace('\\', "\\\\")
-        .replace('"',  "\\\"")
-        .replace('\n', " ");
+    // Use json.dumps for proper string escaping that Python understands
+    let escaped_text = serde_json::to_string(&text).unwrap_or_else(|_| text.clone());
 
     let script = format!(
         r#"
-import asyncio, edge_tts, os, tempfile
+import asyncio, edge_tts, os, tempfile, json
 
 async def main():
     rate_map  = {{"Very Slow":"-50%","Slow":"-25%","Normal":"+0%","Fast":"+20%","Very Fast":"+50%"}}
     voice_map = {{"Nanami":"ja-JP-NanamiNeural","Keita":"ja-JP-KeitaNeural"}}
+    text = json.loads("{}")
     communicate = edge_tts.Communicate(
-        "{text}",
-        voice_map.get("{voice}", "ja-JP-NanamiNeural"),
-        rate=rate_map.get("{rate}", "+0%")
+        text,
+        voice_map.get("{}", "ja-JP-NanamiNeural"),
+        rate=rate_map.get("{}", "+0%")
     )
     output_file = os.path.join(tempfile.gettempdir(), "sensei_tts.mp3")
     await communicate.save(output_file)
@@ -697,9 +698,9 @@ async def main():
 
 asyncio.run(main())
 "#,
-        text  = escaped,
-        voice = voice,
-        rate  = rate
+        escaped_text,
+        voice,
+        rate
     );
 
     let _ = Command::new(get_python_executable())
@@ -1010,8 +1011,11 @@ fn on_mark_word_struggle(app: &slint::Weak<MainWindow>, word: String) {
         let mut state = APP_STATE.write();
         if let Some(entry) = state.vocab_words.iter_mut().find(|w| w.word == word) {
             entry.struggles += 1;
+            // Use SRS intervals: struggles 1→1day, 2→3days, 3→7days, 4→14days, 5+→30days
+            let interval_index = (entry.struggles - 1).min((config::SRS_INTERVALS.len() - 1) as i32) as usize;
+            let interval_days = config::SRS_INTERVALS[interval_index];
             let next = chrono::Local::now()
-                .checked_add_signed(chrono::Duration::days(entry.struggles as i64))
+                .checked_add_signed(chrono::Duration::days(interval_days as i64))
                 .unwrap_or_else(chrono::Local::now);
             entry.next_review = next.format("%Y-%m-%d").to_string();
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -1108,16 +1112,11 @@ fn handle_send_message(app: &slint::Weak<MainWindow>, text: String) {
 fn handle_start_recording(app: &slint::Weak<MainWindow>) {
     info!("Starting recording...");
 
-    {
-        let app = app.clone();
-        slint::invoke_from_event_loop(move || {
-            if let Some(w) = app.upgrade() {
-                w.set_is_recording(true);
-                w.set_status_text(SharedString::from("🔴 Recording..."));
-            }
-        })
-        .ok();
-    }
+    // Signal any previous recording to stop first
+    let stop_script = include_str!("../scripts/stop_recording.py");
+    let _ = Command::new(get_python_executable())
+        .args(&["-c", stop_script])
+        .output();
 
     let result = Command::new(get_python_executable())
         .args(&["-c", include_str!("../scripts/record_audio.py")])
@@ -1126,7 +1125,35 @@ fn handle_start_recording(app: &slint::Weak<MainWindow>) {
         .spawn();
 
     match result {
-        Ok(_)  => { APP_STATE.write().is_recording = true; }
+        Ok(mut child) => {
+            // Wait for "READY" signal from the recording script
+            use std::io::Read;
+            let mut stdout = String::new();
+            if let Some(ref mut stdout_handle) = child.stdout {
+                stdout_handle.read_to_string(&mut stdout).ok();
+            }
+
+            if stdout.trim() == "READY" {
+                APP_STATE.write().is_recording = true;
+                let app_clone = app.clone();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(w) = app_clone.upgrade() {
+                        w.set_is_recording(true);
+                        w.set_status_text(SharedString::from("🔴 Recording..."));
+                    }
+                })
+                .ok();
+            } else {
+                // Process started but didn't send ready signal
+                let stderr = child.stderr.as_mut().map(|s| {
+                    let mut buf = String::new();
+                    s.read_to_string(&mut buf).ok();
+                    buf
+                }).unwrap_or_default();
+                error!("Recording script didn't signal ready. stderr: {}", stderr);
+                set_status(app, &format!("❌ Recording failed to start"));
+            }
+        }
         Err(e) => {
             error!("Failed to start recording: {}", e);
             set_status(app, &format!("❌ Mic error: {}", e));
@@ -1192,16 +1219,18 @@ fn handle_stop_recording(app: &slint::Weak<MainWindow>) {
 }
 
 fn transcribe_audio(audio_path: &str) -> Result<(String, String)> {
+    let model_size = config::WHISPER_MODEL_SIZE;
     let script = format!(
         r#"
 import sys, json
 from faster_whisper import WhisperModel
-model = WhisperModel("medium", device="auto", compute_type="default")
-segments, info = model.transcribe(r"{audio_path}", language="ja")
+model = WhisperModel("{}", device="auto", compute_type="default")
+segments, info = model.transcribe(r"{}", language="ja")
 text = "".join(s.text for s in segments)
 print(json.dumps({{"text": text.strip(), "language": info.language}}))
 "#,
-        audio_path = audio_path
+        model_size,
+        audio_path
     );
 
     let output = Command::new(get_python_executable())
@@ -1273,7 +1302,18 @@ fn save_api_key(app: &slint::Weak<MainWindow>, key: String) {
     APP_STATE.write().api_key = key.clone();
 
     let config_path = get_data_dir().join("config.json");
-    if let Err(e) = fs::write(&config_path, serde_json::json!({ "api_key": key }).to_string()) {
+
+    // Load existing config to preserve other values
+    let mut config: serde_json::Map<String, serde_json::Value> = if let Ok(content) = fs::read_to_string(&config_path) {
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        serde_json::Map::new()
+    };
+
+    // Update only the api_key field
+    config.insert("api_key".to_string(), serde_json::json!(key));
+
+    if let Err(e) = fs::write(&config_path, serde_json::Value::Object(config).to_string()) {
         error!("Failed to save config: {}", e);
     }
 
@@ -1647,8 +1687,19 @@ fn integrate_vocab_from_reply(reply: &str) {
 
 fn load_config_string(key: &str) -> Option<String> {
     let config_path = get_data_dir().join("config.json");
-    fs::read_to_string(&config_path)
-        .ok()
-        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
-        .and_then(|d| d[key].as_str().map(String::from))
+    let content = match fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            info!("Config file not found or unreadable: {} ({})", config_path.display(), e);
+            return None;
+        }
+    };
+    let value = match serde_json::from_str::<serde_json::Value>(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Failed to parse config.json: {}", e);
+            return None;
+        }
+    };
+    value[key].as_str().map(String::from)
 }

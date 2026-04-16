@@ -38,3 +38,6 @@ pub const TTS_RATES: &[(&str, &str)] = &[
     ("Fast", "+20%"),
     ("Very Fast", "+50%"),
 ];
+
+// SRS (Spaced Repetition System) intervals in days
+pub const SRS_INTERVALS: &[i32] = &[1, 3, 7, 14, 30];

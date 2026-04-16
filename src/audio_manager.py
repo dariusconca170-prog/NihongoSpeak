@@ -2,6 +2,10 @@
 audio_manager.py — Microphone enumeration, push-to-talk recording,
 and real-time audio-level metering for the volume visualiser.
 
+DEPRECATED: This module is not currently used by the Rust/Slint application.
+The application uses scripts/record_audio.py and scripts/stop_recording.py instead.
+This module could be integrated in the future for better audio visualization.
+
 Uses *sounddevice* (PortAudio) with a callback-based InputStream so
 the main thread is never blocked while audio data is being captured.
 """
