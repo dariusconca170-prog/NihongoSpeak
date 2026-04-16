@@ -21,6 +21,7 @@ parking_lot = "0.12"
 once_cell = "1.19"
 urlencoding = "2"
 rodio = "0.17"
+winit = "0.29"
 
 [build-dependencies]
 slint-build = "1.9"
