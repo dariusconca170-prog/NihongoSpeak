@@ -14,6 +14,21 @@ CHANNELS = 1
 STATE_FILE = os.path.join(tempfile.gettempdir(), "nihongo_recording_state.json")
 
 
+def list_input_devices():
+    """Return list of (index, name) for available input devices."""
+    devices = []
+    try:
+        for idx, info in enumerate(sd.query_devices()):
+            if info["max_input_channels"] > 0:
+                name = info["name"]
+                if len(name) > 55:
+                    name = name[:52] + "…"
+                devices.append((idx, name))
+    except Exception as e:
+        print(f"Error querying devices: {e}", file=sys.stderr)
+    return devices
+
+
 def load_state():
     """Load state from JSON file."""
     try:
@@ -38,6 +53,43 @@ def is_recording():
 
 
 def main():
+    # Parse optional device index from command line args
+    device_index = None
+    if len(sys.argv) > 1:
+        try:
+            device_index = int(sys.argv[1])
+        except ValueError:
+            pass
+
+    # Validate device exists if specified
+    if device_index is not None:
+        try:
+            info = sd.query_devices(device_index)
+            if info["max_input_channels"] < 1:
+                print("Error: Selected device has no input channels", file=sys.stderr)
+                sys.exit(1)
+        except Exception as e:
+            print(f"Error: Selected microphone not found ({e})", file=sys.stderr)
+            sys.exit(1)
+
+    # Check that at least one input device exists
+    input_devices = list_input_devices()
+    if not input_devices:
+        print("Error: No microphones found on this system", file=sys.stderr)
+        sys.exit(1)
+
+    # If no device specified, use default (None) or first available
+    if device_index is None:
+        # Try default device, fallback to first available
+        try:
+            default_info = sd.query_devices(kind='input')
+            if default_info and default_info["max_input_channels"] > 0:
+                device_index = None  # Use default
+            else:
+                device_index = input_devices[0][0]  # Use first available
+        except Exception:
+            device_index = input_devices[0][0]  # Use first available
+
     # Create temp file path and store in state
     fd, audio_path = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
@@ -64,6 +116,7 @@ def main():
             channels=CHANNELS,
             dtype='float32',
             blocksize=1024,
+            device=device_index,
             callback=callback
         )
 

@@ -40,6 +40,7 @@ pub struct AppState {
     pub current_session_id: Option<String>,
     pub current_session_started: Option<String>,
     pub voicevox_url: String,
+    pub selected_mic_index: Option<i32>,
 }
 
 impl Default for AppState {
@@ -97,6 +98,7 @@ impl Default for AppState {
             current_session_started: None,
             voicevox_url: std::env::var("VOICEVOX_URL")
                 .unwrap_or_else(|_| "http://localhost:50021".to_string()),
+            selected_mic_index: None,
         }
     }
 }
@@ -972,6 +974,24 @@ fn main() {
         });
     }
 
+    // ── Get mic devices ──
+    {
+        let h = app_weak.clone();
+        app.on_get_mic_devices(move || {
+            let app = h.clone();
+            std::thread::spawn(move || handle_get_mic_devices(&app));
+        });
+    }
+
+    // ── Select mic ──
+    {
+        let h = app_weak.clone();
+        app.on_select_mic(move |index| {
+            let app = h.clone();
+            handle_select_mic(&app, index);
+        });
+    }
+
     // Welcome message
     add_message_to_ui(
         &app_weak,
@@ -997,6 +1017,12 @@ fn main() {
     {
         let h = app_weak.clone();
         std::thread::spawn(move || load_sessions_handler(&h));
+    }
+
+    // Pre-load mic devices
+    {
+        let h = app_weak.clone();
+        std::thread::spawn(move || handle_get_mic_devices(&h));
     }
 
     app.run().expect("Failed to run application");
@@ -1118,8 +1144,18 @@ fn handle_start_recording(app: &slint::Weak<MainWindow>) {
         .args(&["-c", stop_script])
         .output();
 
-    let result = Command::new(get_python_executable())
-        .args(&["-c", include_str!("../scripts/record_audio.py")])
+    // Get selected mic device index
+    let device_index = APP_STATE.read().selected_mic_index;
+
+    // Build command - pass device index as argument if selected
+    let mut cmd = Command::new(get_python_executable());
+    cmd.args(&["-c", include_str!("../scripts/record_audio.py")]);
+
+    if let Some(idx) = device_index {
+        cmd.arg(idx.to_string());
+    }
+
+    let result = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
@@ -1151,7 +1187,7 @@ fn handle_start_recording(app: &slint::Weak<MainWindow>) {
                     buf
                 }).unwrap_or_default();
                 error!("Recording script didn't signal ready. stderr: {}", stderr);
-                set_status(app, &format!("❌ Recording failed to start"));
+                set_status(app, &format!("❌ Recording failed to start: {}", stderr.trim()));
             }
         }
         Err(e) => {
@@ -1702,4 +1738,64 @@ fn load_config_string(key: &str) -> Option<String> {
         }
     };
     value[key].as_str().map(String::from)
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUDIO DEVICE ENUMERATION
+// ════════════════════════════════════════════════════════════════
+
+fn get_available_mics() -> Vec<(i32, String)> {
+    let script = r#"
+import sounddevice as sd, json
+devices = []
+for idx, info in enumerate(sd.query_devices()):
+    if info["max_input_channels"] > 0:
+        name = info["name"]
+        if len(name) > 55:
+            name = name[:52] + "…"
+        devices.append((idx, name))
+print(json.dumps(devices))
+"#;
+    let output = Command::new(get_python_executable())
+        .args(&["-c", script])
+        .output();
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if let Ok(devices) = serde_json::from_str::<Vec<Vec<serde_json::Value>>>(&stdout) {
+                devices
+                    .into_iter()
+                    .filter_map(|d| {
+                        let idx = d.get(0)?.as_i64()? as i32;
+                        let name = d.get(1)?.as_str()?.to_string();
+                        Some((idx, name))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+fn handle_get_mic_devices(app: &slint::Weak<MainWindow>) {
+    let mics = get_available_mics();
+
+    let app_clone = app.clone();
+    slint::invoke_from_event_loop(move || {
+        if let Some(w) = app_clone.upgrade() {
+            let names: Vec<SharedString> = mics.iter().map(|(_, name)| SharedString::from(name)).collect();
+            let indices: Vec<i32> = mics.iter().map(|(idx, _)| *idx).collect();
+            w.set_mic_device_names(ModelRc::new(VecModel::from(names)));
+            w.set_mic_device_indices(ModelRc::new(VecModel::from(indices)));
+        }
+    })
+    .ok();
+}
+
+fn handle_select_mic(app: &slint::Weak<MainWindow>, index: i32) {
+    APP_STATE.write().selected_mic_index = Some(index);
+    set_status(app, &format!("🎙 Mic selected (index {})", index));
 }

@@ -112,8 +112,11 @@ export component MainWindow inherits Window {
     in-out property <[MessageData]> messages: [];
     in-out property <[SessionData]> sessions: [];
     in-out property <[VocabData]> vocab: [];
+    in-out property <[string]> mic-device-names: [];
+    in-out property <[int]> mic-device-indices: [];
     in-out property <int> current-tab: 0;
     in-out property <string> input-text: "";
+    in-out property <int> selected-mic-index: -1;
 
     // Callbacks
     callback send-message(string);
@@ -131,6 +134,8 @@ export component MainWindow inherits Window {
     callback delete-session(string);
     callback refresh-vocab();
     callback mark_word_struggle(string);
+    callback get-mic-devices();
+    callback select-mic(int);
 
     background: bg-dark;
 
@@ -185,9 +190,15 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         spacing: 6px;
                         Text { text: "🎙 Mic:"; font-size: 13px; font-weight: 700; color: text-primary; vertical-alignment: center; }
-                        ComboBox {
+                        mic-combo := ComboBox {
                             width: 200px;
-                            model: ["Default Microphone", "Built-in Microphone"];
+                            model: mic-device-names;
+                            selected => {
+                                if mic-combo.current-index >= 0 && mic-combo.current-index < mic-device-indices.length {
+                                    root.selected-mic-index = mic-device-indices[mic-combo.current-index];
+                                    select-mic(mic-device-indices[mic-combo.current-index]);
+                                }
+                            }
                         }
                     }
 
