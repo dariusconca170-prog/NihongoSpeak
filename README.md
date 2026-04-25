@@ -1,4 +1,4 @@
-
+# DEPRECATED, NOT WORKING
 # 日本語 Sensei — NihongoSpeak
 
 An immersive Japanese language tutor built with **Slint** (Rust) for a native desktop UI, powered by **Llama-3.3-70b** via Groq for intelligent tutoring, **Faster-Whisper** for speech recognition, and **Edge-TTS** for natural Japanese voice synthesis.
